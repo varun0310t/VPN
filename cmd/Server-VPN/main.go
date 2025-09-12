@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,25 +138,36 @@ func (s *VPNServer) forwardToInternet(packet []byte, destIP string, protocol str
 		return fmt.Errorf("packet too small")
 	}
 
-	// Skip problematic packets that caused issues before
+	// Skip problematic packets
 	destBytes := packet[16:20]
-
-	// Skip multicast addresses (224.0.0.0 to 239.255.255.255)
 	if destBytes[0] >= 224 && destBytes[0] <= 239 {
-		return nil // Silently skip
+		return nil
 	}
-
-	// Skip broadcast addresses
 	if destBytes[3] == 255 {
-		return nil // Silently skip
+		return nil
 	}
-
-	// Skip IGMP packets (Protocol 2)
 	if packet[9] == 2 {
-		return nil // Silently skip
+		return nil
 	}
 
-	// Forward packet via TUN interface - OS handles routing!
+	// ✅ FIX: Change source IP to server's TUN IP for NAT
+	originalSource := make([]byte, 4)
+	copy(originalSource, packet[12:16]) // Save original source
+
+	// Set source IP to server TUN IP (10.0.0.1) so responses come back to server
+	packet[12] = 10 // Source IP: 10.0.0.1
+	packet[13] = 0
+	packet[14] = 0
+	packet[15] = 1
+
+	// Recalculate IP header checksum after changing source IP
+	packet[10] = 0 // Clear existing checksum
+	packet[11] = 0
+	checksum := calculateIPChecksum(packet[:20])
+	packet[10] = byte(checksum >> 8)
+	packet[11] = byte(checksum & 0xFF)
+
+	// Forward packet via TUN interface
 	_, err := s.tunDevice.Write([][]byte{packet}, 0)
 	if err != nil {
 		return fmt.Errorf("failed to write to TUN: %v", err)
@@ -163,11 +175,31 @@ func (s *VPNServer) forwardToInternet(packet []byte, destIP string, protocol str
 
 	// Log successful forwarding
 	if protocol == "ICMP" || protocol == "UDP" || protocol == "TCP" {
-		fmt.Printf("🌍 Forwarded %s packet to %s via TUN (%d bytes)\n",
-			protocol, destIP, len(packet))
+		fmt.Printf("🌍 Forwarded %s packet to %s via TUN (NAT: %d.%d.%d.%d→10.0.0.1, %d bytes)\n",
+			protocol, destIP, originalSource[0], originalSource[1], originalSource[2], originalSource[3], len(packet))
 	}
 
 	return nil
+}
+
+// Helper function to calculate IP checksum
+func calculateIPChecksum(header []byte) uint16 {
+	var sum uint32
+
+	// Sum all 16-bit words in header
+	for i := 0; i < len(header); i += 2 {
+		if i+1 < len(header) {
+			sum += uint32(header[i])<<8 + uint32(header[i+1])
+		}
+	}
+
+	// Add carry bits
+	for sum>>16 != 0 {
+		sum = (sum & 0xFFFF) + (sum >> 16)
+	}
+
+	// Return one's complement
+	return uint16(^sum)
 }
 
 func (s *VPNServer) handleClient(conn net.Conn, clientID string) {
@@ -302,9 +334,9 @@ func (s *VPNServer) listenForInternetResponses() {
 	lengths := make([]int, 1)
 	responseCount := 0
 	errorCount := 0
+	realResponseCount := 0
 
 	for {
-		// Read from TUN device
 		n, err := s.tunDevice.Read(buffer, lengths, 0)
 		if err != nil {
 			errorCount++
@@ -320,21 +352,32 @@ func (s *VPNServer) listenForInternetResponses() {
 			responsePacket := make([]byte, lengths[0])
 			copy(responsePacket, buffer[0][:lengths[0]])
 
-			// ✅ DEBUG: Log all responses
-			if responseCount <= 10 {
-				if len(responsePacket) >= 20 {
-					sourceIP := net.IPv4(responsePacket[12], responsePacket[13], responsePacket[14], responsePacket[15])
-					destIP := net.IPv4(responsePacket[16], responsePacket[17], responsePacket[18], responsePacket[19])
-					protocol := responsePacket[9]
-					protocolName := "Unknown"
-					switch protocol {
-					case 1:
-						protocolName = "ICMP"
-					case 6:
-						protocolName = "TCP"
-					case 17:
-						protocolName = "UDP"
-					}
+			// ✅ BETTER DEBUGGING
+			if len(responsePacket) >= 20 {
+				sourceIP := net.IPv4(responsePacket[12], responsePacket[13], responsePacket[14], responsePacket[15])
+				destIP := net.IPv4(responsePacket[16], responsePacket[17], responsePacket[18], responsePacket[19])
+				protocol := responsePacket[9]
+				protocolName := "Unknown"
+				switch protocol {
+				case 1:
+					protocolName = "ICMP"
+				case 6:
+					protocolName = "TCP"
+				case 17:
+					protocolName = "UDP"
+				}
+
+				// Check if this looks like a real internet response
+				isRealResponse := (sourceIP.String() == "8.8.8.8" ||
+					sourceIP.String() == "8.8.4.4" ||
+					strings.Contains(sourceIP.String(), "142.251")) &&
+					destIP.String() != "0.0.0.0"
+
+				if isRealResponse {
+					realResponseCount++
+					fmt.Printf("🎉 REAL Response #%d: %s %s → %s (%d bytes)\n",
+						realResponseCount, protocolName, sourceIP, destIP, len(responsePacket))
+				} else if responseCount <= 10 {
 					fmt.Printf("🔍 Response #%d: %s %s → %s (%d bytes)\n",
 						responseCount, protocolName, sourceIP, destIP, len(responsePacket))
 				}
