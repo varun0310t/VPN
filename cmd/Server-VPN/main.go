@@ -16,7 +16,7 @@ var CaptureSocket int
 var Conn net.Conn
 
 func main() {
-	//Create raw socket
+	// Create raw socket
 	Socket = CreateRawSocket()
 	if Socket == -1 {
 		fmt.Printf("Exiting Program (Socket null)")
@@ -26,24 +26,38 @@ func main() {
 
 	CaptureSocket = CreateCaptureSocket()
 	if CaptureSocket == -1 {
-		fmt.Printf("Exiting Program (Socket null)")
+		fmt.Printf("Exiting Program (CaptureSocket null)")
 		return
 	}
 	defer syscall.Close(CaptureSocket)
 
 	Conn, err := ListenForConnection("8080")
 	if err != nil {
-		fmt.Printf("Could not connect to cleint")
+		fmt.Printf("Could not connect to client: %v\n", err)
+		return
 	}
+	defer Conn.Close()
 
-	err = ListenForPackets(Conn)
-	if err != nil {
-		fmt.Printf("Error Listening Packets")
-	}
-	err = ListenForResponse()
-	if err != nil {
-		fmt.Printf("Error Listening Response")
-	}
+	fmt.Println("✅ Server ready - starting packet processing...")
+
+	// ✅ FIX: Run these in goroutines so both can work simultaneously
+	go func() {
+		err := ListenForPackets(Conn)
+		if err != nil {
+			fmt.Printf("Error Listening Packets: %v\n", err)
+		}
+	}()
+
+	go func() {
+		err := ListenForResponse()
+		if err != nil {
+			fmt.Printf("Error Listening Response: %v\n", err)
+		}
+	}()
+
+	// Keep server running
+	fmt.Println("🚀 VPN Server running... Press Ctrl+C to stop")
+	select {} // Block forever
 }
 
 func CreateRawSocket() int {
@@ -252,7 +266,7 @@ func ListenForResponse() error {
 		destIP := net.IPv4(packet[16], packet[17], packet[18], packet[19])
 		// Extract source IP to check if it's from client
 		sourceIP := net.IPv4(packet[12], packet[13], packet[14], packet[15])
-
+		fmt.Printf("source ip %s destip %s", sourceIP.String(), destIP.String())
 		// Skip packet if source IP is from client (192.168.1.12)
 		if sourceIP.String() == "192.168.1.12" {
 			continue

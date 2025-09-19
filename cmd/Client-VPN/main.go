@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	VPN_SERVER_HOST = "192.168.1.12"
+	VPN_SERVER_HOST = "192.168.1.14"
 	VPN_SERVER_PORT = "8080"
 )
 
