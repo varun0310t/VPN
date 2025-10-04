@@ -1,35 +1,38 @@
-//go:build linux
-// +build linux
-
 package main
 
 import (
 	"fmt"
 	"io"
 	"net"
+	"os/exec"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/songgao/water"
 )
 
-var Socket int
-var CaptureSocket int
+var MTU = 1500
+var tun_peer net.IP
+var Interface *water.Interface
 var Conn net.Conn
 
 func main() {
-	// Create raw socket
-	Socket = CreateRawSocket()
-	if Socket == -1 {
-		fmt.Printf("Exiting Program (Socket null)")
+	Interface, err := newTun("tun0")
+	if err != nil {
+		fmt.Println("could not create tun")
 		return
 	}
-	defer syscall.Close(Socket)
-
-	CaptureSocket = CreateCaptureSocket()
-	if CaptureSocket == -1 {
-		fmt.Printf("Exiting Program (CaptureSocket null)")
+	ip := net.ParseIP("10.0.0.1")
+	_, subnet, err := net.ParseCIDR("10.0.0.0/30")
+	if err != nil {
+		fmt.Println("bad CIDR:", err)
 		return
 	}
-	defer syscall.Close(CaptureSocket)
+	if err := setTunIP(Interface, ip, subnet); err != nil {
+		fmt.Println("setTunIP:", err)
+		return
+	}
 
 	Conn, err := ListenForConnection("8080")
 	if err != nil {
@@ -40,7 +43,6 @@ func main() {
 
 	fmt.Println("✅ Server ready - starting packet processing...")
 
-	// ✅ FIX: Run these in goroutines so both can work simultaneously
 	go func() {
 		err := ListenForPackets(Conn)
 		if err != nil {
@@ -58,72 +60,7 @@ func main() {
 	// Keep server running
 	fmt.Println("🚀 VPN Server running... Press Ctrl+C to stop")
 	select {} // Block forever
-}
 
-func CreateRawSocket() int {
-	fmt.Printf(" Trying to Creating Raw Socket ")
-	Socket, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
-
-	if err != nil {
-		fmt.Printf("Error creating Raw socket %v", err)
-		return -1
-	}
-
-	// Enable IP_HDRINCL so we manage our own ip headers instead of kernel managing it
-	err = syscall.SetsockoptInt(Socket, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1)
-	if err != nil {
-		fmt.Printf("Error Enabling IP_HDRINCL %v", err)
-		return -1
-	}
-	fmt.Printf("Raw socket created (fd: %d)\n", Socket)
-	return Socket
-}
-
-func CreateTCPSocket() int {
-	fmt.Printf(" Trying to Creating TCP Socket ")
-	Socket, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)
-	if err != nil {
-		fmt.Printf("Error creating TCP socket %v", err)
-		return -1
-	}
-	fmt.Printf("TCP socket created (fd: %d)\n", Socket)
-	return Socket
-}
-
-func BindAndListenTCP(Socket int, Port uint16) error {
-	addr := &syscall.SockaddrInet4{
-		Port: int(Port),
-		Addr: [4]byte{0, 0, 0, 0},
-	}
-	err := syscall.Bind(Socket, addr)
-	if err != nil {
-		return fmt.Errorf("bind failed: %v", err)
-	}
-
-	// Start listening for connections
-	err = syscall.Listen(Socket, 128) // backlog of 128 connections
-	if err != nil {
-		return fmt.Errorf("listen failed: %v", err)
-	}
-	fmt.Printf("✅ TCP socket listening on port %d\n", Port)
-	return nil
-}
-
-func ListenForConnection(Port string) (net.Conn, error) {
-	listener, err := net.Listen("tcp", ":"+Port)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on port %s: %v", Port, err)
-	}
-	defer listener.Close()
-
-	fmt.Printf("Listening for connections on port %s\n", Port)
-	conn, err := listener.Accept()
-	if err != nil {
-		return nil, fmt.Errorf("failed to accept connection: %v", err)
-	}
-
-	fmt.Printf("Connection accepted from %s\n", conn.RemoteAddr())
-	return conn, nil
 }
 func ListenForPackets(Conn net.Conn) error {
 	fmt.Printf("Listening for Packets from client")
@@ -172,25 +109,24 @@ func ForwardPacketToInternet(Packet []byte) error {
 	destIP := net.IPv4(Packet[16], Packet[17], Packet[18], Packet[19])
 	fmt.Printf("🌍 Forwarding packet to internet: %s\n", destIP)
 
-	// // Modify source IP to VPN server's public IP (NAT)
-	// Packet[12] = 172 // VPN server's IP
-	// Packet[13] = 30
-	// Packet[14] = 66
-	// Packet[15] = 2
+	// Modify source IP to VPN server's public IP (NAT)
+	Packet[12] = 172 // VPN server's IP
+	Packet[13] = 30
+	Packet[14] = 66
+	Packet[15] = 2
 
-	// // Recalculate IP checksum after modifying source IP
-	// Packet[10] = 0 // Clear existing checksum
-	// Packet[11] = 0
-	// checksum := calculateIPChecksum(Packet[:20])
-	// Packet[10] = byte(checksum >> 8)
-	// Packet[11] = byte(checksum & 0xFF)
+	// Recalculate IP checksum after modifying source IP
+	Packet[10] = 0 // Clear existing checksum
+	Packet[11] = 0
+	checksum := calculateIPChecksum(Packet[:20])
+	Packet[10] = byte(checksum >> 8)
+	Packet[11] = byte(checksum & 0xFF)
 
 	// Send packet to internet using raw socket
-	return SendPacket(Socket, Packet, destIP.String())
+	return SendPacket(Packet, destIP.String())
 }
 
-// Send packet using raw socket
-func SendPacket(socket int, packet []byte, destIP string) error {
+func SendPacket(packet []byte, destIP string) error {
 	fmt.Printf("📤 Sending %d bytes to %s\n", len(packet), destIP)
 
 	// Parse destination IP
@@ -203,20 +139,82 @@ func SendPacket(socket int, packet []byte, destIP string) error {
 		return fmt.Errorf("not IPv4 address: %s", destIP)
 	}
 
-	// Create sockaddr for destination
-	addr := &syscall.SockaddrInet4{
-		Port: 0, // This Network layer socket so no port
-		Addr: [4]byte{ip[0], ip[1], ip[2], ip[3]},
-	}
-
 	// Send packet using raw socket
-	err := syscall.Sendto(socket, packet, 0, addr)
+	n, err := Interface.Write(packet)
 	if err != nil {
 		return fmt.Errorf("sendto failed: %v", err)
 	}
 
+	_ = n
+
 	fmt.Printf("✅ Packet sent successfully to %s (%d bytes)\n", destIP, len(packet))
 	return nil
+}
+
+func newTun(name string) (iface *water.Interface, err error) {
+
+	iface, err = water.New(water.Config{DeviceType: 0})
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("interface %v created\n", iface.Name())
+
+	sargs := fmt.Sprintf("link set dev %s up mtu %d qlen 100", iface.Name(), MTU)
+	args := strings.Split(sargs, " ")
+	cmd := exec.Command("ip", args...)
+	fmt.Printf("ip %s\n", sargs)
+	err = cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	return iface, nil
+}
+
+func setTunIP(iface *water.Interface, ip net.IP, subnet *net.IPNet) (err error) {
+	ip = ip.To4()
+	fmt.Println("%v", ip)
+	if ip[3]%2 == 0 {
+		return nil
+	}
+
+	peer := net.IP(make([]byte, 4))
+	copy([]byte(peer), []byte(ip))
+	peer[3]++
+	tun_peer = peer
+
+	sargs := fmt.Sprintf("addr add dev %s local %s peer %s", iface.Name(), ip, peer)
+	args := strings.Split(sargs, " ")
+	cmd := exec.Command("ip", args...)
+	fmt.Println("ip %s", sargs)
+	err = cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	sargs = fmt.Sprintf("route add %s via %s dev %s", subnet, peer, iface.Name())
+	args = strings.Split(sargs, " ")
+	cmd = exec.Command("ip", args...)
+	println("ip %s", sargs)
+	err = cmd.Run()
+	return err
+}
+
+func ListenForConnection(Port string) (net.Conn, error) {
+	listener, err := net.Listen("tcp", ":"+Port)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on port %s: %v", Port, err)
+	}
+	defer listener.Close()
+
+	fmt.Printf("Listening for connections on port %s\n", Port)
+	conn, err := listener.Accept()
+	if err != nil {
+		return nil, fmt.Errorf("failed to accept connection: %v", err)
+	}
+
+	fmt.Printf("Connection accepted from %s\n", conn.RemoteAddr())
+	return conn, nil
 }
 
 // Calculate IP header checksum
@@ -246,7 +244,7 @@ func ListenForResponse() error {
 	fmt.Printf("Listening for Reponse")
 	buffer := make([]byte, 4096)
 	for {
-		n, _, err := syscall.Recvfrom(CaptureSocket, buffer, 0)
+		n, err := Interface.Read(buffer)
 		if err != nil {
 			// Check if it's timeout
 			if errno, ok := err.(syscall.Errno); ok && errno == syscall.EAGAIN {
@@ -275,18 +273,18 @@ func ListenForResponse() error {
 		if destIP.String() == "172.30.60.2" { // Assuming client virtual IP
 			fmt.Printf("📥 Received response packet for client: %s\n", destIP)
 
-			// // Modify destination IP back to client's virtual IP
-			// packet[16] = 192 // Client's virtual IP
-			// packet[17] = 168
-			// packet[18] = 1
-			// packet[19] = 12
+			// Modify destination IP back to client's virtual IP
+			packet[16] = 192 // Client's virtual IP
+			packet[17] = 168
+			packet[18] = 1
+			packet[19] = 12
 
-			// // Recalculate IP checksum
-			// packet[10] = 0
-			// packet[11] = 0
-			// checksum := calculateIPChecksum(packet[:20])
-			// packet[10] = byte(checksum >> 8)
-			// packet[11] = byte(checksum & 0xFF)
+			// Recalculate IP checksum
+			packet[10] = 0
+			packet[11] = 0
+			checksum := calculateIPChecksum(packet[:20])
+			packet[10] = byte(checksum >> 8)
+			packet[11] = byte(checksum & 0xFF)
 
 			// Send packet back to client through TCP connection
 			err = SendPacketToClient(packet)
@@ -320,23 +318,4 @@ func SendPacketToClient(packet []byte) error {
 
 	fmt.Printf("✅ Sent packet to client (%d bytes)\n", len(packet))
 	return nil
-}
-
-func CreateCaptureSocket() int {
-
-	fmt.Printf(" Trying to Creating Capture Raw Socket ")
-	captureSocket, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(syscall.ETH_P_IP)))
-
-	if err != nil {
-		fmt.Printf("Error creating Raw socket %v", err)
-		return -1
-	}
-
-	fmt.Printf("Capture socket created (fd: %d)\n", Socket)
-	return captureSocket
-
-}
-
-func htons(i uint16) uint16 {
-	return (i<<8)&0xff00 | i>>8
 }
