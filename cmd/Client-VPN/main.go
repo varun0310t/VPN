@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ import (
 )
 
 var (
-	VPN_SERVER_HOST = "192.168.1.15"
+	VPN_SERVER_HOST = "172.25.0.2"
 	VPN_SERVER_PORT = "8080"
 	TUN_INTERFACE   = "tun0"
 	VPN_CLIENT_IP   = "10.8.0.2"
@@ -35,7 +34,7 @@ type TunInterface struct {
 }
 
 func main() {
-	fmt.Println("🚀 Starting Linux VPN client...")
+	fmt.Println("🚀 Starting Linux VPN client (UDP mode)...")
 
 	// ✅ CLEAR ALL LOGS FIRST
 	clearAllLogs()
@@ -69,7 +68,7 @@ func main() {
 		fmt.Println("\n🧹 Cleaning up...")
 		restoreOriginalRoutes()
 		tunIface.Close()
-		fmt.Println("✅ Cleanup complete - internet should work now")
+		fmt.Println("✅ Cleanup complete")
 	}()
 
 	// Set default route through VPN
@@ -79,24 +78,30 @@ func main() {
 		return
 	}
 
-	// Connect to VPN server
-	fmt.Printf("🔗 Connecting to VPN server at %s:%s...\n", VPN_SERVER_HOST, VPN_SERVER_PORT)
-	serverConn, err := connectToVPNServer()
+	// ✅ Create UDP connection
+	fmt.Printf("🔗 Connecting to VPN server at %s:%s (UDP)...\n", VPN_SERVER_HOST, VPN_SERVER_PORT)
+	serverAddr, err := net.ResolveUDPAddr("udp", VPN_SERVER_HOST+":"+VPN_SERVER_PORT)
 	if err != nil {
-		fmt.Printf("❌ Failed to connect to the server: %v\n", err)
+		fmt.Printf("❌ Failed to resolve server address: %v\n", err)
 		return
 	}
-	defer serverConn.Close()
-	fmt.Println("✅ Connected to VPN server successfully!")
+
+	udpConn, err := net.DialUDP("udp", nil, serverAddr)
+	if err != nil {
+		fmt.Printf("❌ Failed to create UDP connection: %v\n", err)
+		return
+	}
+	defer udpConn.Close()
+	fmt.Println("✅ UDP connection established!")
 
 	// Start response reader
-	go readResponsesFromServer(serverConn, tunIface)
+	go readResponsesFromServer(udpConn, tunIface)
 
 	// Main packet forwarding loop
 	buffer := make([]byte, 1500)
 	count := 0
 
-	fmt.Println("🔄 VPN active - forwarding packets...")
+	fmt.Println("🔄 VPN active - forwarding packets via UDP...")
 
 	for {
 		select {
@@ -148,8 +153,8 @@ func main() {
 								protocolName)
 						}
 
-						// Forward packet to server
-						err = forwardPacketToServer(serverConn, packet)
+						// ✅ Send via UDP (no length prefix)
+						err = forwardPacketToServer(udpConn, packet)
 						if err != nil {
 							fmt.Printf("❌ Failed to forward packet %d: %v\n", count, err)
 							continue
@@ -264,7 +269,7 @@ func restoreOriginalRoutes() error {
 	if gateway != "" {
 		runCommand("ip", "route", "add", "default", "via", gateway)
 	} else {
-		runCommand("ip", "route", "add", "default", "via", "172.30.64.1", "dev", "eth0")
+		runCommand("ip", "route", "add", "default", "via", "172.25.0.1", "dev", "eth0") // Changed
 	}
 
 	return nil
@@ -275,7 +280,7 @@ func getDefaultGateway() string {
 	cmd := exec.Command("ip", "route", "show", "default")
 	output, err := cmd.Output()
 	if err != nil {
-		return "172.30.64.1 " // fallback
+		return "172.25.0.1" // Docker gateway - changed from 172.30.64.1
 	}
 
 	fields := string(output)
@@ -290,7 +295,7 @@ func getDefaultGateway() string {
 			return fields[start:end]
 		}
 	}
-	return "172.30.64.1 " // fallback
+	return "172.25.0.1" // Docker gateway - changed from 172.30.64.1
 }
 
 func (tun *TunInterface) Read(buffer []byte) (int, error) {
@@ -310,71 +315,35 @@ func (tun *TunInterface) Close() error {
 	return nil
 }
 
-func connectToVPNServer() (net.Conn, error) {
-	serverAddr := VPN_SERVER_HOST + ":" + VPN_SERVER_PORT
-	conn, err := net.Dial("tcp", serverAddr)
+func forwardPacketToServer(conn *net.UDPConn, packet []byte) error {
+	// ✅ UDP: Send packet directly (no length prefix)
+	_, err := conn.Write(packet)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to %s: %v", serverAddr, err)
+		return fmt.Errorf("failed to send UDP packet: %v", err)
 	}
-	return conn, nil
-}
-
-func forwardPacketToServer(conn net.Conn, packet []byte) error {
-	packetLen := len(packet)
-	lengthBytes := []byte{
-		byte(packetLen >> 24),
-		byte(packetLen >> 16),
-		byte(packetLen >> 8),
-		byte(packetLen),
-	}
-
-	// Send length prefix
-	_, err := conn.Write(lengthBytes)
-	if err != nil {
-		return fmt.Errorf("failed to send packet length: %v", err)
-	}
-
-	// Send actual packet
-	_, err = conn.Write(packet)
-	if err != nil {
-		return fmt.Errorf("failed to send packet data: %v", err)
-	}
-
 	return nil
 }
 
-func readResponsesFromServer(serverConn net.Conn, tunIface *TunInterface) {
-	fmt.Println("📥 Starting response reader...")
+func readResponsesFromServer(udpConn *net.UDPConn, tunIface *TunInterface) {
+	fmt.Println("📥 Starting UDP response reader...")
 	responseCount := 0
+	buffer := make([]byte, 65535)
 
 	for {
-		// Read length prefix
-		lengthBytes := make([]byte, 4)
-		serverConn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		_, err := io.ReadFull(serverConn, lengthBytes)
+		// ✅ UDP: Read packet directly (no length prefix)
+		udpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		n, err := udpConn.Read(buffer)
 		if err != nil {
-			if err == io.EOF {
-				fmt.Println("📡 Server disconnected")
-			} else {
-				fmt.Printf("❌ Error reading response length: %v\n", err)
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
 			}
+			fmt.Printf("❌ Error reading UDP response: %v\n", err)
 			break
 		}
 
-		// Parse length
-		responseLen := int(lengthBytes[0])<<24 | int(lengthBytes[1])<<16 |
-			int(lengthBytes[2])<<8 | int(lengthBytes[3])
+		responsePacket := buffer[:n]
 
-		// Read packet data
-		responsePacket := make([]byte, responseLen)
-		_, err = io.ReadFull(serverConn, responsePacket)
-		if err != nil {
-			fmt.Printf("❌ Error reading response packet: %v\n", err)
-			break
-		}
-		// Rewrite destination IP to actual eth0 IP and recalculate checksum
 		if len(responsePacket) >= 20 {
-
 			// Parse eth0 IP
 			eth0IPBytes := net.ParseIP("10.8.0.2").To4()
 			if eth0IPBytes == nil {
@@ -412,7 +381,6 @@ func readResponsesFromServer(serverConn net.Conn, tunIface *TunInterface) {
 			responsePacket[11] = byte(checksum & 0xFF)
 
 			// Log packet to file for validation
-
 			logPacketToFile(responsePacket, responseCount, "response")
 			// Write response back to TUN interface
 			_, err = tunIface.Write(responsePacket)
@@ -423,19 +391,16 @@ func readResponsesFromServer(serverConn net.Conn, tunIface *TunInterface) {
 
 			responseCount++
 			if responseCount%25 == 0 {
-				fmt.Printf("📨 Received %d responses from server\n", responseCount)
+				fmt.Printf("📨 Received %d UDP responses\n", responseCount)
 			}
 
 			// Debug: Log first few responses
-
 			sourceIP := net.IPv4(responsePacket[12], responsePacket[13], responsePacket[14], responsePacket[15])
 			destIP := net.IPv4(responsePacket[16], responsePacket[17], responsePacket[18], responsePacket[19])
-			protocol = responsePacket[9]
 			protocolName := getProtocolName(protocol)
 
 			fmt.Printf("📩 Response #%d: %s → %s (%s, %d bytes)\n",
 				responseCount, sourceIP, destIP, protocolName, len(responsePacket))
-
 		}
 	}
 }
@@ -502,7 +467,7 @@ func logPacketToFile(packet []byte, count int, packetType string) {
 	timestamp := time.Now().Format("15:04:05.000")
 
 	// Write log entry header
-	logEntry := fmt.Sprintf("\n[%s] %s #%d:s\n",
+	logEntry := fmt.Sprintf("\n[%s] %s #%d\n",
 		timestamp, packetType, count)
 
 	if _, err := file.WriteString(logEntry); err != nil {

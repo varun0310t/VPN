@@ -5,57 +5,57 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"syscall"
-	"time"
 )
 
 var Socket int
 var CaptureSocket int
-var Conn net.Conn
+var UDPConn *net.UDPConn
+var ClientAddr *net.UDPAddr
 
 func main() {
 	// Create raw socket
 	Socket = CreateRawSocket()
 	if Socket == -1 {
-		fmt.Printf("Exiting Program (Socket null)")
-		return
+		panic("Failed to create raw socket")
 	}
 	defer syscall.Close(Socket)
 
 	CaptureSocket = CreateCaptureSocket()
 	if CaptureSocket == -1 {
-		fmt.Printf("Exiting Program (CaptureSocket null)")
-		return
+		panic("Failed to create capture socket")
 	}
 	defer syscall.Close(CaptureSocket)
 
-	Conn, err := ListenForConnection("8080")
+	// ✅ Create UDP listener instead of TCP
+	var err error
+	UDPConn, err = net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.ParseIP("0.0.0.0"),
+		Port: 8080,
+	})
 	if err != nil {
-		fmt.Printf("Could not connect to client: %v\n", err)
-		return
+		panic(fmt.Sprintf("Could not create UDP listener: %v", err))
 	}
-	defer Conn.Close()
+	defer UDPConn.Close()
 
-	fmt.Println("✅ Server ready - starting packet processing...")
+	fmt.Println("✅ Server ready - UDP listening on port 8080")
 
-	// ✅ FIX: Run these in goroutines so both can work simultaneously
+	// ✅ Run both goroutines
 	go func() {
-		err := ListenForPackets(Conn)
+		err := ListenForPackets(UDPConn)
 		if err != nil {
-			fmt.Printf("Error Listening Packets: %v\n", err)
+			fmt.Printf("❌ ListenForPackets error: %v\n", err)
 		}
 	}()
 
 	go func() {
 		err := ListenForResponse()
 		if err != nil {
-			fmt.Printf("Error Listening Response: %v\n", err)
+			fmt.Printf("❌ ListenForResponse error: %v\n", err)
 		}
 	}()
 
-	// Keep server running
 	fmt.Println("🚀 VPN Server running... Press Ctrl+C to stop")
 	select {} // Block forever
 }
@@ -125,41 +125,32 @@ func ListenForConnection(Port string) (net.Conn, error) {
 	fmt.Printf("Connection accepted from %s\n", conn.RemoteAddr())
 	return conn, nil
 }
-func ListenForPackets(Conn net.Conn) error {
-	fmt.Printf("Listening for Packets from client")
+func ListenForPackets(conn *net.UDPConn) error {
+	fmt.Printf("Listening for UDP packets from client\n")
+
+	buffer := make([]byte, 65535) // Max UDP packet size
 
 	for {
-		lengthBytes := make([]byte, 4)
-		Conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		_, err := io.ReadFull(Conn, lengthBytes)
+		// Read UDP packet
+		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			if err == io.EOF {
-				fmt.Println(" Client disconnected")
-			} else {
-				fmt.Printf(" Error reading response length: %v\n", err)
-			}
-			break
-		}
-		packetLen := int(uint32(lengthBytes[0])<<24 | uint32(lengthBytes[1])<<16 | uint32(lengthBytes[2])<<8 | uint32(lengthBytes[3]))
-		PacketByte := make([]byte, packetLen)
-		Conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		_, err = io.ReadFull(Conn, PacketByte)
-		if err != nil {
-			if err == io.EOF {
-				fmt.Println(" Client disconnected")
-			} else {
-				fmt.Printf(" Error reading response length: %v\n", err)
-			}
-			break
-		}
-		err = ForwardPacketToInternet(PacketByte)
-		if err != nil {
-			fmt.Printf("Error on Forwarding Packet to Internet")
+			fmt.Printf("❌ Error reading UDP packet: %v\n", err)
+			continue
 		}
 
+		// Store client address for responses
+		ClientAddr = addr
+
+		if n > 0 {
+			packet := buffer[:n]
+
+			// Forward packet to internet
+			err = ForwardPacketToInternet(packet)
+			if err != nil {
+				fmt.Printf("❌ Error forwarding packet: %v\n", err)
+			}
+		}
 	}
-
-	return nil
 }
 
 // Forward packet to internet
@@ -243,79 +234,77 @@ func calculateIPChecksum(header []byte) uint16 {
 }
 
 func ListenForResponse() error {
-	fmt.Printf("Listening for Reponse")
+	fmt.Printf("Listening for Response\n")
 	buffer := make([]byte, 4096)
+
 	for {
 		n, _, err := syscall.Recvfrom(CaptureSocket, buffer, 0)
 		if err != nil {
-			// Check if it's timeout
-			if errno, ok := err.(syscall.Errno); ok && errno == syscall.EAGAIN {
-				continue
-			}
 			fmt.Printf("⚠️ Receive error: %v\n", err)
 			continue
 		}
 
-		if n < 20 {
+		// ✅ FIX: AF_PACKET socket includes Ethernet header (14 bytes)
+		// Ethernet header: [6 bytes dest MAC][6 bytes src MAC][2 bytes EtherType]
+		if n < 34 { // 14 (Ethernet) + 20 (IP header minimum)
+			continue
+		}
+
+		// Skip Ethernet header (14 bytes) to get to IP packet
+		packet := buffer[14:n]
+
+		if len(packet) < 20 {
 			continue // Skip packets too short for IP header
 		}
 
-		packet := buffer[:n]
-
-		// Extract destination IP (should be our VPN client's virtual IP)
+		// Extract destination IP (bytes 16-19 of IP header)
 		destIP := net.IPv4(packet[16], packet[17], packet[18], packet[19])
-		// Extract source IP to check if it's from client
+		// Extract source IP (bytes 12-15 of IP header)
 		sourceIP := net.IPv4(packet[12], packet[13], packet[14], packet[15])
-		fmt.Printf("source ip %s destip %s \n", sourceIP.String(), destIP.String())
-		// Skip packet if source IP is from client (192.168.1.12)
-		if sourceIP.String() == "192.168.1.12" {
+
+		fmt.Printf("📦 Captured packet - Source: %s -> Dest: %s\n", sourceIP.String(), destIP.String())
+
+		// Skip packet if source IP is from client (avoid loops)
+		if sourceIP.String() == "172.25.0.3" {
+			fmt.Printf("⏩ Skipping packet from client\n")
 			continue
 		}
-		// Check if this packet is meant for our VPN client
-		if destIP.String() == "172.30.60.2" { // Assuming client virtual IP
-			fmt.Printf("📥 Received response packet for client: %s\n", destIP)
 
-			// // Modify destination IP back to client's virtual IP
-			// packet[16] = 192 // Client's virtual IP
-			// packet[17] = 168
-			// packet[18] = 1
-			// packet[19] = 12
+		// Check if this packet is meant for our VPN server (responses to forwarded packets)
+		if destIP.String() == "172.25.0.2" {
+			fmt.Printf("📥 Received response packet for client: %s -> %s\n", sourceIP, destIP)
 
-			// // Recalculate IP checksum
-			// packet[10] = 0
-			// packet[11] = 0
-			// checksum := calculateIPChecksum(packet[:20])
-			// packet[10] = byte(checksum >> 8)
-			// packet[11] = byte(checksum & 0xFF)
+			// Modify destination IP back to client's virtual IP
+			packet[16] = 10 // Client's virtual IP: 10.8.0.2
+			packet[17] = 8
+			packet[18] = 0
+			packet[19] = 2
 
-			// Send packet back to client through TCP connection
+			// Recalculate IP checksum
+			packet[10] = 0
+			packet[11] = 0
+			checksum := calculateIPChecksum(packet[:20])
+			packet[10] = byte(checksum >> 8)
+			packet[11] = byte(checksum & 0xFF)
+
+			// Send via UDP
 			err = SendPacketToClient(packet)
 			if err != nil {
-				fmt.Printf("Error sending packet to client: %v\n", err)
+				fmt.Printf("❌ Error sending packet to client: %v\n", err)
 			}
 		}
 	}
 }
 
 func SendPacketToClient(packet []byte) error {
-	// Create packet length header (4 bytes, big-endian)
-	lengthBytes := make([]byte, 4)
-	packetLen := uint32(len(packet))
-	lengthBytes[0] = byte(packetLen >> 24)
-	lengthBytes[1] = byte(packetLen >> 16)
-	lengthBytes[2] = byte(packetLen >> 8)
-	lengthBytes[3] = byte(packetLen)
-
-	// Send length header first
-	_, err := Conn.Write(lengthBytes)
-	if err != nil {
-		return fmt.Errorf("failed to send packet length: %v", err)
+	if ClientAddr == nil {
+		return fmt.Errorf("no client address available")
 	}
 
-	// Send the actual packet
-	_, err = Conn.Write(packet)
+	// ✅ UDP: Send packet directly (no length prefix needed)
+	_, err := UDPConn.WriteToUDP(packet, ClientAddr)
 	if err != nil {
-		return fmt.Errorf("failed to send packet: %v", err)
+		return fmt.Errorf("failed to send UDP packet: %v", err)
 	}
 
 	fmt.Printf("✅ Sent packet to client (%d bytes)\n", len(packet))
@@ -323,7 +312,6 @@ func SendPacketToClient(packet []byte) error {
 }
 
 func CreateCaptureSocket() int {
-
 	fmt.Printf(" Trying to Creating Capture Raw Socket ")
 	captureSocket, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(syscall.ETH_P_IP)))
 
@@ -334,7 +322,6 @@ func CreateCaptureSocket() int {
 
 	fmt.Printf("Capture socket created (fd: %d)\n", Socket)
 	return captureSocket
-
 }
 
 func htons(i uint16) uint16 {

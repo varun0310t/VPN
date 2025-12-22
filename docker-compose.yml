@@ -1,31 +1,42 @@
 version: '3.8'
 
 services:
-  vpn-test:
-    build: .
-    container_name: vpn-packet-test
-    privileged: true  # Required for TUN/TAP and iptables
+  vpn-server:
+    build:
+      context: .
+      dockerfile: cmd/Server-VPN/DockerFile
+    container_name: vpn-server
+    privileged: true
     cap_add:
-      - NET_ADMIN     # Required for network operations
-      - SYS_ADMIN     # Required for TUN/TAP
-    devices:
-      - "/dev/net/tun:/dev/net/tun"  # TUN device access
-    sysctls:
-      - net.ipv4.ip_forward=1        # Enable IP forwarding
-    networks:
-      - vpn-network
+      - NET_ADMIN
+      - NET_RAW
     ports:
-      - "8080:8080"  # If you need to expose any ports
+      - "8080:8080"
+    networks:
+      vpn-network:
+        ipv4_address: 172.25.0.2
+
+  vpn-client:
+    build:
+      context: .
+      dockerfile: cmd/Client-VPN/DockerFile
+    container_name: vpn-client
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      - vpn-server
     environment:
-      - DEBIAN_FRONTEND=noninteractive
-    volumes:
-      - ./logs:/app/logs  # For logging output
-    stdin_open: true
-    tty: true
+      - SERVER_IP=172.25.0.2
+      - SERVER_PORT=8080
+    networks:
+      vpn-network:
+        ipv4_address: 172.25.0.3
 
 networks:
   vpn-network:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.25.0.0/16

@@ -18,7 +18,9 @@ var Interface *water.Interface
 var Conn net.Conn
 
 func main() {
-	Interface, err := newTun("tun0")
+	// ✅ FIX: Use = instead of := to assign to global variable
+	var err error
+	Interface, err = newTun("tun0")
 	if err != nil {
 		fmt.Println("could not create tun")
 		return
@@ -241,7 +243,7 @@ func calculateIPChecksum(header []byte) uint16 {
 }
 
 func ListenForResponse() error {
-	fmt.Printf("Listening for Reponse")
+	fmt.Println("Listening for Reponse")
 	buffer := make([]byte, 4096)
 	for {
 		n, err := Interface.Read(buffer)
@@ -266,11 +268,11 @@ func ListenForResponse() error {
 		sourceIP := net.IPv4(packet[12], packet[13], packet[14], packet[15])
 		fmt.Printf("source ip %s destip %s \n", sourceIP.String(), destIP.String())
 		// Skip packet if source IP is from client (192.168.1.12)
-		if sourceIP.String() == "192.168.1.12" {
+		if sourceIP.String() == "192.168.1.14" {
 			continue
 		}
 		// Check if this packet is meant for our VPN client
-		if destIP.String() == "172.30.60.2" { // Assuming client virtual IP
+		if destIP.String() == "172.30.66.2" { // Assuming client virtual IP
 			fmt.Printf("📥 Received response packet for client: %s\n", destIP)
 
 			// Modify destination IP back to client's virtual IP
