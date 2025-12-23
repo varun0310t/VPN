@@ -1,6 +1,7 @@
-package connection
+package src
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -9,46 +10,60 @@ import (
 // ClientSession identified by UDP address only
 // No virtual IP tracking needed - client handles that!
 type ClientSession struct {
-	Addr        *net.UDPAddr
-	LastSeen    time.Time
-	BytesSent   uint64
-	BytesRecv   uint64
-	ConnectedAt time.Time
+	Addr          *net.UDPAddr
+	NATPort       int
+	LastSeen      time.Time
+	Authenticated bool
+	BytesSent     uint64
+	BytesRecv     uint64
+	ConnectedAt   time.Time
 }
 
 type Manager struct {
-	// Key: "IP:Port" string (UDP address)
 	sessions map[string]*ClientSession
+	natPorts map[int]*ClientSession
+	PortPool *PortPool
 	mu       sync.RWMutex
 }
 
-func NewManager() *Manager {
+func NewManager() (*Manager, error) {
+
 	return &Manager{
 		sessions: make(map[string]*ClientSession),
-	}
+		natPorts: make(map[int]*ClientSession),
+		PortPool: NewPortPool(ServerCfg.NATPortMin, ServerCfg.NATPortMax),
+	}, nil
 }
 
-// Add or update client session (only UDP address, no virtual IP)
-func (m *Manager) AddClient(addr *net.UDPAddr) {
+func (m *Manager) AddClient(addr *net.UDPAddr) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	key := addr.String()
 
 	if existing, ok := m.sessions[key]; ok {
-		// Update existing session
+
 		existing.LastSeen = time.Now()
-		return
+		return nil
 	}
 
-	// New session
+	natPort, err := m.PortPool.Allocate()
+	if err != nil {
+		return fmt.Errorf("failed to allocate NAT port: %w", err)
+	}
+
 	session := &ClientSession{
 		Addr:        addr,
+		NATPort:     natPort,
 		LastSeen:    time.Now(),
 		ConnectedAt: time.Now(),
 	}
 
 	m.sessions[key] = session
+	m.natPorts[natPort] = session
+
+	fmt.Printf("Client connected: %s -> NAT Port: %d\n", addr.String(), natPort)
+	return nil
 }
 
 // Get client by UDP address
@@ -60,11 +75,72 @@ func (m *Manager) GetClient(addr *net.UDPAddr) (*ClientSession, bool) {
 	return session, exists
 }
 
+// GetClientByNATPort looks up client by their assigned NAT port
+func (m *Manager) GetClientByNATPort(port int) (*ClientSession, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.natPorts[port]
+	return session, exists
+}
+
+// add Client if not exists and than get Client by UDP address
+func (m *Manager) GetOrAddClient(addr *net.UDPAddr) (*ClientSession, error) {
+	key := addr.String()
+
+	// Try read lock first (fast path)
+	m.mu.RLock()
+	if session, exists := m.sessions[key]; exists {
+		session.LastSeen = time.Now()
+		m.mu.RUnlock()
+		return session, nil
+	}
+	m.mu.RUnlock()
+
+	// Need to add - upgrade to write lock
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Double-check (another goroutine might have added it)
+	if session, exists := m.sessions[key]; exists {
+		session.LastSeen = time.Now()
+		return session, nil
+	}
+
+	// Allocate NAT port
+	natPort, err := m.PortPool.Allocate()
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate NAT port: %w", err)
+	}
+
+	// Create new session
+	session := &ClientSession{
+		Addr:        addr,
+		NATPort:     natPort,
+		LastSeen:    time.Now(),
+		ConnectedAt: time.Now(),
+	}
+	m.sessions[key] = session
+	m.natPorts[natPort] = session
+
+	fmt.Printf("Client connected: %s -> NAT Port: %d\n", addr.String(), natPort)
+	return session, nil
+}
+
 // Remove client by UDP address
 func (m *Manager) RemoveClient(addr *net.UDPAddr) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.sessions, addr.String())
+
+	key := addr.String()
+	if session, exists := m.sessions[key]; exists {
+		// Release NAT port
+		m.PortPool.Release(session.NATPort)
+		delete(m.natPorts, session.NATPort)
+		delete(m.sessions, key)
+
+		fmt.Printf("Client disconnected: %s (NAT Port: %d)\n", addr.String(), session.NATPort)
+	}
 }
 
 // Update last seen timestamp
@@ -106,6 +182,9 @@ func (m *Manager) CleanupStale(timeout time.Duration) int {
 
 	for key, session := range m.sessions {
 		if now.Sub(session.LastSeen) > timeout {
+			// Release NAT port
+			m.PortPool.Release(session.NATPort)
+			delete(m.natPorts, session.NATPort)
 			delete(m.sessions, key)
 			removed++
 		}
@@ -154,10 +233,24 @@ func (m *Manager) GetSessionInfo(addr *net.UDPAddr) map[string]interface{} {
 
 	return map[string]interface{}{
 		"address":      session.Addr.String(),
+		"nat_port":     session.NATPort,
 		"connected_at": session.ConnectedAt,
 		"last_seen":    session.LastSeen,
 		"bytes_sent":   session.BytesSent,
 		"bytes_recv":   session.BytesRecv,
 		"duration":     time.Since(session.ConnectedAt).Seconds(),
+	}
+}
+
+// SetAuthenticated marks a client session as authenticated
+func (m *Manager) SetAuthenticated(addr *net.UDPAddr, authenticated bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if session, exists := m.sessions[addr.String()]; exists {
+		session.Authenticated = authenticated
+		if authenticated {
+			fmt.Printf("Client %s authenticated successfully\n", addr.String())
+		}
 	}
 }

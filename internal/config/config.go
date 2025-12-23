@@ -16,6 +16,8 @@ type ServerConfig struct {
 	TLSEnabled    bool     `json:"tls_enabled"`
 	CertFile      string   `json:"cert_file"`
 	KeyFile       string   `json:"key_file"`
+	NATPortMin    int      `json:"nat_port_min"`
+	NATPortMax    int      `json:"nat_port_max"`
 }
 
 type ClientConfig struct {
@@ -29,9 +31,28 @@ type ClientConfig struct {
 	LogLevel      string   `json:"log_level"`
 }
 
-func LoadServerConfig(path string) (*ServerConfig, error) {
+func LoadServerConfig() (*ServerConfig, error) {
+	path := "config/server_config.json"
+
 	data, err := os.ReadFile(path)
 	if err != nil {
+		// Return default config if file doesn't exist
+		if os.IsNotExist(err) {
+			return &ServerConfig{
+				ListenAddress: "0.0.0.0",
+				ListenPort:    8443,
+				TunIP:         "10.8.0.1",
+				TunSubnet:     "10.8.0.0/24",
+				DNS:           []string{"8.8.8.8", "8.8.4.4"},
+				MaxClients:    10,
+				LogLevel:      "info",
+				TLSEnabled:    true,
+				CertFile:      "certs/server.crt",
+				KeyFile:       "certs/server.key",
+				NATPortMin:    10000,
+				NATPortMax:    60000,
+			}, nil
+		}
 		return nil, err
 	}
 
