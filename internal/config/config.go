@@ -53,6 +53,7 @@ func LoadServerConfig() (*ServerConfig, error) {
 				KeyFile:       "certs/server.key",
 				IPPoolMin:     0,
 				IPPoolMax:     255,
+				TunDevice:     "tun0",
 			}, nil
 		}
 		return nil, err

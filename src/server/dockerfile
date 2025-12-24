@@ -13,7 +13,7 @@ RUN go mod download
 COPY . .
 
 # Build the server with verbose output
-RUN go build -v -o vpn-server ./src/server && \
+RUN go build -v -o vpn-server ./src/Server.go && \
     chmod +x vpn-server 
 # Expose VPN port
 EXPOSE 8080/udp

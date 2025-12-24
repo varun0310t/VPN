@@ -62,8 +62,12 @@ func NewTunInterface(name string) (*TunInterface, error) {
 func (tun *TunInterface) Configure(ipAddr string, subnet string) error {
 	fmt.Printf("Configuring TUN interface %s...\n", tun.name)
 
+	// Flush any existing IP addresses first
+	cmd := exec.Command("ip", "addr", "flush", "dev", tun.name)
+	_ = cmd.Run() // Ignore errors if no IPs exist
+
 	// Set IP address
-	cmd := exec.Command("ip", "addr", "add", ipAddr+"/24", "dev", tun.name)
+	cmd = exec.Command("ip", "addr", "add", ipAddr+"/24", "dev", tun.name)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to set IP: %w", err)
 	}
