@@ -1,0 +1,23 @@
+FROM golang:1.24.4-alpine
+
+# Install required packages
+RUN apk add --no-cache iptables iproute2 gcc musl-dev linux-headers git make
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the client
+RUN go build -o vpn-client ./cmd/Client/client.go
+
+# Make binary executable
+RUN chmod +x vpn-client
+
+# Use shell form to allow command override from docker-compose
+ENTRYPOINT ["/app/vpn-client"]
+CMD ["-server", "vpn-server", "-port", "8080"]

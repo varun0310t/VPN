@@ -41,19 +41,20 @@ func LoadServerConfig() (*ServerConfig, error) {
 		// Return default config if file doesn't exist
 		if os.IsNotExist(err) {
 			return &ServerConfig{
-				ListenAddress: "0.0.0.0",
-				ListenPort:    8080,
-				TunIP:         "10.8.0.1",
-				TunSubnet:     "10.8.0.0/24",
-				DNS:           []string{"8.8.8.8", "8.8.4.4"},
-				MaxClients:    10,
-				LogLevel:      "info",
-				TLSEnabled:    true,
-				CertFile:      "certs/server.crt",
-				KeyFile:       "certs/server.key",
-				IPPoolMin:     0,
-				IPPoolMax:     255,
-				TunDevice:     "tun0",
+				ListenAddress:     "0.0.0.0",
+				ListenPort:        8080,
+				TunIP:             "10.8.0.0",
+				TunSubnet:         "10.8.0.0/24",
+				DNS:               []string{"8.8.8.8", "8.8.4.4"},
+				MaxClients:        10,
+				LogLevel:          "info",
+				TLSEnabled:        true,
+				CertFile:          "certs/server.crt",
+				KeyFile:           "certs/server.key",
+				IPPoolMin:         10,
+				IPPoolMax:         255,
+				TunDevice:         "tun0",
+				OutgoingInterface: "eth0",
 			}, nil
 		}
 		return nil, err

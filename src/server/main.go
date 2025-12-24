@@ -58,7 +58,7 @@ func Run() error {
 	if udpConn == nil {
 		return fmt.Errorf("server not initialized, call InitServer() first")
 	}
-
+	tunManager.Start()
 	buffer := make([]byte, 65535)
 
 	for {

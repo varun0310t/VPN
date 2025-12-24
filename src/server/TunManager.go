@@ -128,7 +128,7 @@ func (tun *TunInterface) WritePacket(packet []byte) error {
 		return fmt.Errorf("failed to write to TUN: %w", err)
 	}
 
-	fmt.Printf("✅ Wrote %d bytes to TUN interface\n", n)
+	fmt.Printf("✅ Wrote %d bytes to TUN\n", n)
 	return nil
 }
 
@@ -310,42 +310,44 @@ func (tm *TunManager) receiveLoop() {
 		packet := buffer[:n]
 
 		// Parse IP header
-		ipHeader := ParseIPHeader(packet)
-		if ipHeader == nil {
+		if len(packet) < 20 {
 			continue
 		}
 
-		fmt.Printf("📥 TUN packet: %s -> %s (%d bytes)\n",
-			ipHeader.SrcIP.String(), ipHeader.DstIP.String(), n)
+		destIP := net.IPv4(packet[16], packet[17], packet[18], packet[19])
+		srcIP := net.IPv4(packet[12], packet[13], packet[14], packet[15])
 
-		// Route packet back to client
-		tm.routeToClient(packet)
+		fmt.Printf("📥 TUN packet: %s -> %s (%d bytes)\n", srcIP.String(), destIP.String(), n)
+
+		// Prepend PacketTypeData header before sending to client
+		vpnPacket := make([]byte, 1+len(packet))
+		vpnPacket[0] = byte(0x03) // PacketTypeData
+		copy(vpnPacket[1:], packet)
+
+		// Send to client with VPN protocol header
+		tm.sendToClient(vpnPacket)
 	}
 }
 
-// routeToClient routes packet back to VPN client based on destination IP
-func (tm *TunManager) routeToClient(packet []byte) {
-	ipHeader := ParseIPHeader(packet)
-	if ipHeader == nil {
+// sendToClient sends packet back to the connected client
+func (tm *TunManager) sendToClient(packet []byte) {
+	// Get the client session (we only have one client for now, simplify)
+	sessions := ClientManager.GetAllSessions()
+	if len(sessions) == 0 {
 		return
 	}
 
-	// Extract destination IP last octet (10.8.0.X -> X)
-	destIPOctet := int(ipHeader.DstIP.To4()[3])
-
-	// Lookup client by IP using ClientManager
-	session, exists := ClientManager.GetClientByIP(destIPOctet)
-	if !exists {
-		fmt.Printf("No client found for IP 10.8.0.%d\n", destIPOctet)
-		return
-	}
-
-	// Send packet back to client via UDP
-	_, err := udpConn.WriteToUDP(packet, session.Addr)
-	if err != nil {
-		fmt.Printf("❌ Error sending to client: %v\n", err)
-	} else {
-		fmt.Printf("✅ Sent %d bytes to client %s\n", len(packet), session.Addr.String())
+	// Send to first authenticated client
+	for _, session := range sessions {
+		if session.Authenticated {
+			_, err := udpConn.WriteToUDP(packet, session.Addr)
+			if err != nil {
+				fmt.Printf("❌ Error sending to client: %v\n", err)
+			} else {
+				fmt.Printf("✅ Sent %d bytes to client %s\n", len(packet), session.Addr.String())
+			}
+			return
+		}
 	}
 }
 
@@ -358,43 +360,43 @@ func (tm *TunManager) ForwardFromClient(packet []byte, assignedIP int) error {
 	}
 
 	// **SWAP SOURCE IP**: Replace client's source IP with their assigned VPN IP
-	vpnIP := net.IPv4(10, 8, 0, byte(assignedIP))
+	// vpnIP := net.IPv4(10, 8, 0, byte(assignedIP))
 
-	// Modify source IP in packet
-	packet[12] = vpnIP[0]
-	packet[13] = vpnIP[1]
-	packet[14] = vpnIP[2]
-	packet[15] = vpnIP[3]
+	// // Modify source IP in packet
+	// packet[12] = vpnIP[0]
+	// packet[13] = vpnIP[1]
+	// packet[14] = vpnIP[2]
+	// packet[15] = vpnIP[3]
 
-	// Recalculate IP checksum
-	packet[10] = 0 // Clear old checksum
-	packet[11] = 0
-	checksum := CalculateIPChecksum(packet[:20])
-	packet[10] = byte(checksum >> 8)
-	packet[11] = byte(checksum)
+	// // Recalculate IP checksum
+	// packet[10] = 0 // Clear old checksum
+	// packet[11] = 0
+	// checksum := CalculateIPChecksum(packet[:20])
+	// packet[10] = byte(checksum >> 8)
+	// packet[11] = byte(checksum)
 
-	// Recalculate TCP/UDP checksum if needed
-	protocol := packet[9]
-	if protocol == 6 || protocol == 17 { // TCP or UDP
-		ipHeaderLen := int((packet[0] & 0x0F) * 4)
-		// Clear transport layer checksum
-		if protocol == 6 { // TCP
-			packet[ipHeaderLen+16] = 0
-			packet[ipHeaderLen+17] = 0
-		} else { // UDP
-			packet[ipHeaderLen+6] = 0
-			packet[ipHeaderLen+7] = 0
-		}
+	// // Recalculate TCP/UDP checksum if needed
+	// protocol := packet[9]
+	// if protocol == 6 || protocol == 17 { // TCP or UDP
+	// 	ipHeaderLen := int((packet[0] & 0x0F) * 4)
+	// 	// Clear transport layer checksum
+	// 	if protocol == 6 { // TCP
+	// 		packet[ipHeaderLen+16] = 0
+	// 		packet[ipHeaderLen+17] = 0
+	// 	} else { // UDP
+	// 		packet[ipHeaderLen+6] = 0
+	// 		packet[ipHeaderLen+7] = 0
+	// 	}
 
-		tcpChecksum := CalculateTCPChecksum(packet, vpnIP, ipHeader.DstIP)
-		if protocol == 6 {
-			packet[ipHeaderLen+16] = byte(tcpChecksum >> 8)
-			packet[ipHeaderLen+17] = byte(tcpChecksum)
-		} else {
-			packet[ipHeaderLen+6] = byte(tcpChecksum >> 8)
-			packet[ipHeaderLen+7] = byte(tcpChecksum)
-		}
-	}
+	// 	tcpChecksum := CalculateTCPChecksum(packet, vpnIP, ipHeader.DstIP)
+	// 	if protocol == 6 {
+	// 		packet[ipHeaderLen+16] = byte(tcpChecksum >> 8)
+	// 		packet[ipHeaderLen+17] = byte(tcpChecksum)
+	// 	} else {
+	// 		packet[ipHeaderLen+6] = byte(tcpChecksum >> 8)
+	// 		packet[ipHeaderLen+7] = byte(tcpChecksum)
+	// 	}
+	// }
 
 	fmt.Printf("🌍 Forwarding from client: 10.8.0.%d -> %s\n",
 		assignedIP, ipHeader.DstIP.String())

@@ -20,6 +20,26 @@ services:
     sysctls:
       - net.ipv4.ip_forward=1
 
+  vpn-client:
+    build:
+      context: .
+      dockerfile: ./src/client/dockerfile
+    container_name: vpn-client
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun
+    depends_on:
+      - vpn-server
+    command: ["-server", "vpn-server", "-port", "8080"]
+    restart: unless-stopped
+    networks:
+      - vpn-network
+    sysctls:
+      - net.ipv4.ip_forward=1
+
 networks:
   vpn-network:
     driver: bridge
