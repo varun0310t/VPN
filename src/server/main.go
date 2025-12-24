@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/pion/dtls/v2"
 	"github.com/varun0310t/VPN/internal/config"
 )
 
 var (
 	ServerCfg     *config.ServerConfig
 	udpConn       *net.UDPConn
+	dtlsConn      net.Listener
 	ClientManager *Manager
 	tunManager    *TunManager
 )
@@ -31,9 +33,22 @@ func InitServer() error {
 		return fmt.Errorf("failed to resolve UDP address: %w", err)
 	}
 
-	udpConn, err = net.ListenUDP("udp", udpAddr)
+	// udpConn, err = net.ListenUDP("udp", udpAddr)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to start UDP listener: %w", err)
+	// }
+
+	//wrap with dtls
+
+	dtlsConfig, err := LoadDtlsConfig(ServerCfg)
 	if err != nil {
-		return fmt.Errorf("failed to start UDP listener: %w", err)
+		return fmt.Errorf("failed to load DTLS config: %w", err)
+	}
+
+	dtlsConn, err = dtls.Listen("udp", udpAddr, dtlsConfig)
+
+	if err != nil {
+		return fmt.Errorf("failed to start DTLS listener: %w", err)
 	}
 
 	ClientManager, err = NewManager()
@@ -55,28 +70,50 @@ func InitServer() error {
 
 // Run starts the main server loop (call this to start accepting connections)
 func Run() error {
-	if udpConn == nil {
+	if dtlsConn == nil {
 		return fmt.Errorf("server not initialized, call InitServer() first")
 	}
 	tunManager.Start()
-	buffer := make([]byte, 65535)
 
+	// Accept DTLS connections in a loop
 	for {
-		n, clientAddr, err := udpConn.ReadFromUDP(buffer)
-		_ = clientAddr
+		// Accept a new encrypted connection
+		conn, err := dtlsConn.Accept()
 		if err != nil {
-			fmt.Printf("Error reading UDP packet: %v\n", err)
+			fmt.Printf("Error accepting DTLS connection: %v\n", err)
 			continue
 		}
 
-		// Copy data for goroutine
+		// each client in a separate goroutine
+		go handleDTLSClient(conn)
+	}
+}
+
+func handleDTLSClient(conn net.Conn) {
+	defer conn.Close()
+
+	// Get client address
+	clientAddr := conn.RemoteAddr()
+	fmt.Printf("New encrypted connection from: %s\n", clientAddr)
+
+	ClientManager.AddClient(clientAddr.(*net.UDPAddr), conn)
+
+	buffer := make([]byte, 65535)
+
+	// Read packets from this specific client connection
+	for {
+		n, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Printf("Client %s disconnected: %v\n", clientAddr, err)
+			return
+		}
+
+		// Copy data for handling
 		dataCopy := make([]byte, n)
 		copy(dataCopy, buffer[:n])
 
-		HandlePacket(dataCopy, clientAddr)
-
-		// Handle each client packet in separate goroutine
-		//go handleClientPacket(dataCopy, clientAddr)
+		// Handle packet (you'll need to adapt this to work with net.Conn)
+		go HandlePacket(dataCopy, clientAddr)
 	}
 }
 

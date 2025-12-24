@@ -30,7 +30,7 @@ type VPNPacket struct {
 }
 
 // HandlePacket processes incoming packets from clients
-func HandlePacket(data []byte, clientAddr *net.UDPAddr) {
+func HandlePacket(data []byte, clientAddr net.Addr) {
 	// Minimum packet size check
 	if len(data) < 1 {
 		fmt.Printf("Received invalid packet from %s: too small\n", clientAddr.String())
@@ -57,20 +57,21 @@ func HandlePacket(data []byte, clientAddr *net.UDPAddr) {
 }
 
 // handleAuthPacket processes authentication requests
-func handleAuthPacket(payload []byte, clientAddr *net.UDPAddr) {
+func handleAuthPacket(payload []byte, clientAddr net.Addr) {
 	fmt.Printf("Auth request from %s\n", clientAddr.String())
 
-	session, err := ClientManager.GetOrAddClient(clientAddr)
-	if err != nil {
-		fmt.Printf("Failed to create session for %s: %v\n", clientAddr.String(), err)
-		sendAuthResponse(clientAddr, false, 0)
+	session, exists := ClientManager.GetClient(clientAddr)
+	if !exists {
+		fmt.Printf("Session not found for %s\n", clientAddr.String())
+		sendAuthResponse(clientAddr, false, nil)
 		return
 	}
-	//convert user buffer to string
+
+	// Convert payload to string
 	receivedPassword := string(payload)
 	if receivedPassword != ServerCfg.Password {
 		fmt.Printf("Authentication failed for %s: incorrect password\n", clientAddr.String())
-		sendAuthResponse(clientAddr, false, 0)
+		sendAuthResponse(clientAddr, false, nil)
 		return
 	}
 
@@ -81,7 +82,7 @@ func handleAuthPacket(payload []byte, clientAddr *net.UDPAddr) {
 }
 
 // handleDataPacket processes VPN data packets
-func handleDataPacket(payload []byte, clientAddr *net.UDPAddr) {
+func handleDataPacket(payload []byte, clientAddr net.Addr) {
 	// Check if client is authenticated
 	session, exists := ClientManager.GetClient(clientAddr)
 	if !exists {
@@ -98,10 +99,10 @@ func handleDataPacket(payload []byte, clientAddr *net.UDPAddr) {
 	ClientManager.UpdateLastSeen(clientAddr)
 	ClientManager.AddBytesRecv(clientAddr, uint64(len(payload)))
 
-	fmt.Printf("Data packet from %s (Assigned IP: 10.8.0.%d): %d bytes\n",
-		clientAddr.String(), session.AssignedIP, len(payload))
+	fmt.Printf("Data packet from %s (Assigned IP: %s): %d bytes\n",
+		clientAddr.String(), session.AssignedIP.String(), len(payload))
 
-	// Forward packet to the raw Socket or TUN interface
+	// Forward packet to the TUN interface
 	err := tunManager.ForwardFromClient(payload, session.AssignedIP)
 	if err != nil {
 		fmt.Printf("Failed to forward packet from %s: %v\n", clientAddr.String(), err)
@@ -109,7 +110,7 @@ func handleDataPacket(payload []byte, clientAddr *net.UDPAddr) {
 }
 
 // handlePingPacket processes keep-alive pings
-func handlePingPacket(payload []byte, clientAddr *net.UDPAddr) {
+func handlePingPacket(payload []byte, clientAddr net.Addr) {
 	// Check if client is authenticated
 	session, exists := ClientManager.GetClient(clientAddr)
 	if !exists || !session.Authenticated {
@@ -122,13 +123,13 @@ func handlePingPacket(payload []byte, clientAddr *net.UDPAddr) {
 }
 
 // handleDisconnectPacket processes disconnect requests
-func handleDisconnectPacket(payload []byte, clientAddr *net.UDPAddr) {
+func handleDisconnectPacket(payload []byte, clientAddr net.Addr) {
 	fmt.Printf("Disconnect request from %s\n", clientAddr.String())
 	ClientManager.RemoveClient(clientAddr)
 }
 
 // handleAskForIPPacket processes IP address requests
-func handleAskForIPPacket(payload []byte, clientAddr *net.UDPAddr) {
+func handleAskForIPPacket(payload []byte, clientAddr net.Addr) {
 	// Check if client is authenticated
 	session, exists := ClientManager.GetClient(clientAddr)
 	if !exists || !session.Authenticated {
@@ -138,36 +139,40 @@ func handleAskForIPPacket(payload []byte, clientAddr *net.UDPAddr) {
 
 	fmt.Printf("IP request from %s\n", clientAddr.String())
 
-	// Assign IP from pool (10.8.0.2 onwards)
-	assignedIP := fmt.Sprintf("10.8.0.%d", session.AssignedIP)
-
-	sendIPResponse(clientAddr, assignedIP)
+	sendIPResponse(clientAddr, session.AssignedIP)
 }
 
 // sendAuthResponse sends authentication response to client
-func sendAuthResponse(addr *net.UDPAddr, success bool, assignedIP int) {
+func sendAuthResponse(addr net.Addr, success bool, assignedIP net.IP) {
 	var response []byte
 
 	if success {
-		// Success response with assigned IP
+		// Convert IP to 4-byte format
+		ip4 := assignedIP.To4()
+		if ip4 == nil {
+			fmt.Printf("Invalid IP address format\n")
+			return
+		}
+
+		// Success response with assigned IP (5 bytes total)
 		response = make([]byte, 5)
 		response[0] = byte(PacketTypeAuthRespPass)
-		// Pack assigned IP last octet (4 bytes, big endian)
-		response[1] = byte(assignedIP >> 24)
-		response[2] = byte(assignedIP >> 16)
-		response[3] = byte(assignedIP >> 8)
-		response[4] = byte(assignedIP)
+		response[1] = ip4[0] // First octet (10)
+		response[2] = ip4[1] // Second octet (8)
+		response[3] = ip4[2] // Third octet (0)
+		response[4] = ip4[3] // Fourth octet (e.g., 2, 3, 4...)
 	} else {
 		// Failure response
 		response = []byte{byte(PacketTypeAuthRespFail)}
 	}
 
-	_, err := udpConn.WriteToUDP(response, addr)
+	// Use ClientManager to write to client
+	err := ClientManager.WriteToClient(addr, response)
 	if err != nil {
 		fmt.Printf("Failed to send auth response to %s: %v\n", addr.String(), err)
 	} else {
 		if success {
-			fmt.Printf("Auth success sent to %s (Assigned IP: 10.8.0.%d)\n", addr.String(), assignedIP)
+			fmt.Printf("Auth success sent to %s (Assigned IP: %s)\n", addr.String(), assignedIP.String())
 		} else {
 			fmt.Printf("Auth failure sent to %s\n", addr.String())
 		}
@@ -175,44 +180,41 @@ func sendAuthResponse(addr *net.UDPAddr, success bool, assignedIP int) {
 }
 
 // sendPongPacket sends pong response to client
-func sendPongPacket(addr *net.UDPAddr) {
+func sendPongPacket(addr net.Addr) {
 	packet := []byte{byte(PacketTypePong)}
-	_, err := udpConn.WriteToUDP(packet, addr)
+
+	err := ClientManager.WriteToClient(addr, packet)
 	if err != nil {
 		fmt.Printf("Failed to send pong to %s: %v\n", addr.String(), err)
 	}
 }
 
 // sendIPResponse sends IP address response to client
-func sendIPResponse(addr *net.UDPAddr, ipAddr string) {
-	// Convert IP string to 4 bytes
-	ip := net.ParseIP(ipAddr).To4()
-	if ip == nil {
-		fmt.Printf("Invalid IP address: %s\n", ipAddr)
+func sendIPResponse(addr net.Addr, assignedIP net.IP) {
+	// Convert to 4-byte format
+	ip4 := assignedIP.To4()
+	if ip4 == nil {
+		fmt.Printf("Invalid IP address format\n")
 		return
 	}
 
 	// Response: [PacketType][IP byte 1][IP byte 2][IP byte 3][IP byte 4]
 	response := make([]byte, 5)
 	response[0] = byte(PacketTypeIPRes)
-	response[1] = ip[0]
-	response[2] = ip[1]
-	response[3] = ip[2]
-	response[4] = ip[3]
+	response[1] = ip4[0]
+	response[2] = ip4[1]
+	response[3] = ip4[2]
+	response[4] = ip4[3]
 
-	_, err := udpConn.WriteToUDP(response, addr)
+	err := ClientManager.WriteToClient(addr, response)
 	if err != nil {
 		fmt.Printf("Failed to send IP response to %s: %v\n", addr.String(), err)
 	} else {
-		fmt.Printf("IP response sent to %s: %s\n", addr.String(), ipAddr)
+		fmt.Printf("IP response sent to %s: %s\n", addr.String(), assignedIP.String())
 	}
 }
 
 // SendToClient sends raw data to a client (utility function)
-func SendToClient(addr *net.UDPAddr, data []byte) error {
-	_, err := udpConn.WriteToUDP(data, addr)
-	if err != nil {
-		return fmt.Errorf("failed to send to client %s: %w", addr.String(), err)
-	}
-	return nil
+func SendToClient(addr net.Addr, data []byte) error {
+	return ClientManager.WriteToClient(addr, data)
 }

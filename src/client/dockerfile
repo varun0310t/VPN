@@ -1,7 +1,7 @@
 FROM golang:1.24.4-alpine
 
 # Install required packages
-RUN apk add --no-cache iptables iproute2 gcc musl-dev linux-headers git make
+RUN apk add --no-cache iptables iproute2 gcc musl-dev linux-headers git make openssl
 
 WORKDIR /app
 
@@ -17,6 +17,13 @@ RUN go build -o vpn-client ./cmd/Client/client.go
 
 # Make binary executable
 RUN chmod +x vpn-client
+
+# # Create certificate directory and generate client certificates
+# RUN mkdir -p /etc/vpn && \
+#     openssl req -x509 -newkey rsa:4096 -keyout /etc/vpn/client-key.pem -out /etc/vpn/client-cert.pem \
+#     -days 365 -nodes -subj "/CN=vpn-client" && \
+#     chmod 600 /etc/vpn/client-key.pem && \
+#     chmod 644 /etc/vpn/client-cert.pem
 
 # Use shell form to allow command override from docker-compose
 ENTRYPOINT ["/app/vpn-client"]

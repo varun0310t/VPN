@@ -324,35 +324,33 @@ func (tm *TunManager) receiveLoop() {
 		vpnPacket[0] = byte(0x03) // PacketTypeData
 		copy(vpnPacket[1:], packet)
 
-		// Send to client with VPN protocol header
-		tm.sendToClient(vpnPacket)
+		go tm.sendToClient(vpnPacket, destIP)
 	}
 }
 
 // sendToClient sends packet back to the connected client
-func (tm *TunManager) sendToClient(packet []byte) {
+func (tm *TunManager) sendToClient(packet []byte, destIP net.IP) {
 	// Get the client session (we only have one client for now, simplify)
-	sessions := ClientManager.GetAllSessions()
-	if len(sessions) == 0 {
+	session, exist := ClientManager.GetClientByIP(destIP)
+	if !exist {
+		fmt.Printf("❌ No client found for IP %s\n", destIP.String())
 		return
 	}
 
-	// Send to first authenticated client
-	for _, session := range sessions {
-		if session.Authenticated {
-			_, err := udpConn.WriteToUDP(packet, session.Addr)
-			if err != nil {
-				fmt.Printf("❌ Error sending to client: %v\n", err)
-			} else {
-				fmt.Printf("✅ Sent %d bytes to client %s\n", len(packet), session.Addr.String())
-			}
-			return
+	if session.Authenticated {
+		_, err := session.Conn.Write(packet)
+		if err != nil {
+			fmt.Printf("❌ Error sending to client: %v\n", err)
+		} else {
+			fmt.Printf("✅ Sent %d bytes to client %s\n", len(packet), session.Addr.String())
 		}
+		return
 	}
+
 }
 
 // ForwardFromClient forwards packet from VPN client to TUN interface
-func (tm *TunManager) ForwardFromClient(packet []byte, assignedIP int) error {
+func (tm *TunManager) ForwardFromClient(packet []byte, assignedIP net.IP) error {
 	// Parse IP header
 	ipHeader := ParseIPHeader(packet)
 	if ipHeader == nil {
@@ -399,7 +397,7 @@ func (tm *TunManager) ForwardFromClient(packet []byte, assignedIP int) error {
 	// }
 
 	fmt.Printf("🌍 Forwarding from client: 10.8.0.%d -> %s\n",
-		assignedIP, ipHeader.DstIP.String())
+		assignedIP.String(), ipHeader.DstIP.String())
 
 	// Write to TUN - kernel handles NAT and routing
 	return tm.tun.WritePacket(packet)

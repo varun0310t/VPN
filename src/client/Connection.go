@@ -4,9 +4,13 @@
 package client
 
 import (
+	"crypto/x509"
 	"fmt"
 	"net"
+	"os"
 	"time"
+
+	"github.com/pion/dtls/v2"
 )
 
 // PacketType identifies the type of VPN packet
@@ -26,7 +30,7 @@ const (
 
 type VPNClient struct {
 	serverAddr    *net.UDPAddr
-	conn          *net.UDPConn
+	conn          net.Conn // Changed to net.Conn for DTLS
 	tunManager    *TunManager
 	assignedIP    string
 	authenticated bool
@@ -41,15 +45,42 @@ func NewVPNClient(serverIP string, serverPort int) (*VPNClient, error) {
 		return nil, fmt.Errorf("failed to resolve server address: %w", err)
 	}
 
+	// Load server certificate for verification
+	certPool := x509.NewCertPool()
+	serverCert, err := os.ReadFile("/etc/vpn/server-cert.pem")
+	if err != nil {
+		fmt.Printf("⚠️ Warning: Could not load server cert, using insecure mode: %v\n", err)
+		certPool = nil
+	} else {
+		certPool.AppendCertsFromPEM(serverCert)
+	}
+
+	// Configure DTLS
+	config := &dtls.Config{
+		InsecureSkipVerify:   certPool == nil, // Only skip in dev/testing
+		RootCAs:              certPool,
+		ExtendedMasterSecret: dtls.RequireExtendedMasterSecret,
+	}
+
 	// Create UDP connection
-	conn, err := net.DialUDP("udp", nil, serverAddr)
+	udpConn, err := net.DialUDP("udp", nil, serverAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create UDP connection: %w", err)
 	}
 
+	// Wrap with DTLS
+	fmt.Println("🔒 Establishing encrypted DTLS connection...")
+	dtlsConn, err := dtls.Client(udpConn, config)
+	if err != nil {
+		udpConn.Close()
+		return nil, fmt.Errorf("failed to establish DTLS connection: %w", err)
+	}
+
+	fmt.Println("✅ Encrypted connection established!")
+
 	return &VPNClient{
 		serverAddr: serverAddr,
-		conn:       conn,
+		conn:       dtlsConn, // Now encrypted!
 		netConfig:  NewNetworkConfig(),
 	}, nil
 }
@@ -164,10 +195,8 @@ func (vc *VPNClient) forwardFromTUN() {
 		}
 
 		// Wrap in VPN data packet and send to server
-		err = vc.sendDataPacket(packet)
-		if err != nil {
-			fmt.Printf("❌ Error sending to server: %v\n", err)
-		}
+		go vc.sendDataPacket(packet)
+
 	}
 }
 
@@ -192,7 +221,7 @@ func (vc *VPNClient) receiveFromServer() {
 
 		switch packetType {
 		case PacketTypeData:
-			vc.handleDataPacket(payload)
+			go vc.handleDataPacket(payload)
 		case PacketTypePong:
 			// Keep-alive response received
 		default:
