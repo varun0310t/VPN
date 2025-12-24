@@ -66,6 +66,13 @@ func handleAuthPacket(payload []byte, clientAddr *net.UDPAddr) {
 		sendAuthResponse(clientAddr, false, 0)
 		return
 	}
+	//convert user buffer to string
+	receivedPassword := string(payload)
+	if receivedPassword != ServerCfg.Password {
+		fmt.Printf("Authentication failed for %s: incorrect password\n", clientAddr.String())
+		sendAuthResponse(clientAddr, false, 0)
+		return
+	}
 
 	// Mark session as authenticated
 	ClientManager.SetAuthenticated(clientAddr, true)

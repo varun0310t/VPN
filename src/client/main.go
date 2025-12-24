@@ -12,6 +12,7 @@ import (
 
 var (
 	vpnClient *VPNClient
+	ClientCfg *ClientConfig
 )
 
 func InitClient(serverAddr string, serverPort int) error {
@@ -20,6 +21,11 @@ func InitClient(serverAddr string, serverPort int) error {
 	vpnClient, err = NewVPNClient(serverAddr, serverPort)
 	if err != nil {
 		return fmt.Errorf("failed to create VPN client: %w", err)
+	}
+
+	ClientCfg, err = loadClientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load client config: %w", err)
 	}
 
 	// Save original network configuration
@@ -49,7 +55,7 @@ func Connect() error {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\n🛑 Shutting down VPN client...")
+		fmt.Println("\n Shutting down VPN client")
 		Disconnect()
 		os.Exit(0)
 	}()

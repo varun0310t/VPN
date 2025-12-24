@@ -103,7 +103,10 @@ func (vc *VPNClient) Connect() error {
 }
 
 func (vc *VPNClient) sendAuthRequest() error {
-	packet := []byte{byte(PacketTypeAuthReq)}
+	payload := []byte(ClientCfg.Password)
+	packet := make([]byte, len(payload)+1)
+	packet[0] = byte(PacketTypeAuthReq)
+	copy(packet[1:], payload)
 	_, err := vc.conn.Write(packet)
 	return err
 }

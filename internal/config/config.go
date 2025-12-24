@@ -20,17 +20,7 @@ type ServerConfig struct {
 	IPPoolMax         int      `json:"ip_pool_max"`
 	TunDevice         string   `json:"tun_device"`
 	OutgoingInterface string   `json:"outgoing_interface"`
-}
-
-type ClientConfig struct {
-	ServerAddress string   `json:"server_address"`
-	ServerPort    int      `json:"server_port"`
-	Username      string   `json:"username"`
-	Password      string   `json:"password"`
-	TunIP         string   `json:"tun_ip"`
-	DNS           []string `json:"dns_servers"`
-	AutoReconnect bool     `json:"auto_reconnect"`
-	LogLevel      string   `json:"log_level"`
+	Password          string   `json:"password"`
 }
 
 func LoadServerConfig() (*ServerConfig, error) {
@@ -55,23 +45,13 @@ func LoadServerConfig() (*ServerConfig, error) {
 				IPPoolMax:         255,
 				TunDevice:         "tun0",
 				OutgoingInterface: "eth0",
+				Password:          "VPN1234",
 			}, nil
 		}
 		return nil, err
 	}
 
 	var config ServerConfig
-	err = json.Unmarshal(data, &config)
-	return &config, err
-}
-
-func LoadClientConfig(path string) (*ClientConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var config ClientConfig
 	err = json.Unmarshal(data, &config)
 	return &config, err
 }
