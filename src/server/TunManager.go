@@ -79,6 +79,10 @@ func (tun *TunInterface) Configure(ipAddr string, subnet string) error {
 		return fmt.Errorf("failed to set IP: %w", err)
 	}
 
+	cmd = exec.Command("ip", "link", "set", "dev", tun.name, "qlen", "5000")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to set transmit queue length: %w", err)
+	}
 	// Bring interface up
 	cmd = exec.Command("ip", "link", "set", "dev", tun.name, "up")
 	if err := cmd.Run(); err != nil {
