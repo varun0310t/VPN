@@ -68,6 +68,8 @@ func NewVPNClient(serverIP string, serverPort int) (*VPNClient, error) {
 		return nil, fmt.Errorf("failed to create UDP connection: %w", err)
 	}
 
+	udpConn.SetReadBuffer(4 * 1024 * 1024)
+	udpConn.SetWriteBuffer(4 * 1024 * 1024)
 	// Wrap with DTLS
 	fmt.Println(" Establishing encrypted DTLS connection...")
 	dtlsConn, err := dtls.Client(udpConn, config)

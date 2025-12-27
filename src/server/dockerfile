@@ -13,7 +13,7 @@ RUN go mod download
 COPY . .
 
 # Build the server 
-RUN go build -v -o vpn-server ./cmd/Server/Server.go && \
+RUN GOAMD64=v3 go build -v -o vpn-server ./cmd/Server/Server.go && \
     chmod +x vpn-server 
 
 #  certificate directory and generate self-signed certificates for DTLS
@@ -27,4 +27,4 @@ RUN mkdir -p /etc/vpn && \
 EXPOSE 8080/udp
 
 
-CMD ["/app/vpn-server"]
+CMD ["nice", "-n", "-20", "/app/vpn-server"]
