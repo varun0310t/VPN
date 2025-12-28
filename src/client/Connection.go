@@ -178,7 +178,8 @@ func (vc *VPNClient) waitForAuthResponse() error {
 
 func (vc *VPNClient) forwardFromTUN() {
 	buffer := make([]byte, 65535)
-
+	PacketSendCounter := 0
+	PrevTime := time.Now().UnixMilli()
 	for vc.running {
 		n, err := vc.tunManager.ReadPacket(buffer)
 		if err != nil {
@@ -197,13 +198,21 @@ func (vc *VPNClient) forwardFromTUN() {
 
 		// Wrap in VPN data packet and send to server
 		vc.sendDataPacket(packet)
+		PacketSendCounter++
+		CurrentTime := time.Now().UnixMilli()
+		if CurrentTime-PrevTime >= 1000 {
+			fmt.Printf(" Sent %d packets in the last second\n", PacketSendCounter)
+			PacketSendCounter = 0
+			PrevTime = CurrentTime
+		}
 
 	}
 }
 
 func (vc *VPNClient) receiveFromServer() {
 	buffer := make([]byte, 65535)
-
+	PacketRecvCounter := 0
+	PrevTime := time.Now().UnixMilli()
 	for vc.running {
 		n, err := vc.conn.Read(buffer)
 		if err != nil {
@@ -228,14 +237,22 @@ func (vc *VPNClient) receiveFromServer() {
 		default:
 			fmt.Printf("Unknown packet type: 0x%02x\n", packetType)
 		}
+
+		PacketRecvCounter++
+		CurrentTime := time.Now().UnixMilli()
+		if CurrentTime-PrevTime >= 1000 {
+			fmt.Printf(" Received %d packets in the last second\n", PacketRecvCounter)
+			PacketRecvCounter = 0
+			PrevTime = CurrentTime
+		}
 	}
 }
 
 func (vc *VPNClient) handleDataPacket(payload []byte) {
 
 	if len(payload) >= 20 {
-		srcIP := net.IPv4(payload[12], payload[13], payload[14], payload[15])
-		fmt.Printf(" Received from VPN: src=%s (%d bytes)\n", srcIP.String(), len(payload))
+		//	srcIP := net.IPv4(payload[12], payload[13], payload[14], payload[15])
+		//	fmt.Printf(" Received from VPN: src=%s (%d bytes)\n", srcIP.String(), len(payload))
 	}
 
 	// Write packet to TUN interface

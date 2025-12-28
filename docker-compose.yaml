@@ -33,7 +33,7 @@ services:
       - /dev/net/tun
     depends_on:
       - vpn-server
-    command: ["-server", "vpn-server", "-port", "8080"]
+    command: ["-server", "139.59.3.246", "-port", "8080"]
     restart: unless-stopped
     networks:
       - vpn-network
@@ -53,7 +53,7 @@ services:
       - /dev/net/tun
     depends_on:
       - vpn-server
-    command: ["-server", "vpn-server", "-port", "8080"]
+    command: ["-server", "139.59.3.246", "-port", "8080"]
     restart: unless-stopped
     networks:
       - vpn-network
