@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -59,6 +60,12 @@ func NewTunManager(tunName string, assignedIP string) (*TunManager, error) {
 
 	// Configure the interface
 	err = tm.Configure()
+	if err != nil {
+		syscall.Close(fd)
+		return nil, err
+	}
+
+	err = tm.ConfigureDNS()
 	if err != nil {
 		syscall.Close(fd)
 		return nil, err
@@ -128,6 +135,54 @@ func (tm *TunManager) WritePacket(packet []byte) error {
 
 	if n != len(packet) {
 		return fmt.Errorf("partial write: wrote %d of %d bytes", n, len(packet))
+	}
+
+	return nil
+}
+
+func (tm *TunManager) ConfigureDNS() error {
+
+	dnsServers := []string{"8.8.8.8", "1.1.1.1"}
+
+	// If systemd-resolved's resolvectl is available, use it to set DNS for the interface
+	if _, err := exec.LookPath("resolvectl"); err == nil {
+		args := append([]string{"dns", tm.name}, dnsServers...)
+		if out, err := exec.Command("resolvectl", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("resolvectl dns failed: %w - %s", err, string(out))
+		}
+
+		return nil
+	}
+
+	// Fallback: update /etc/resolv.conf (backup existing)
+	dst := "/etc/resolv.conf"
+	backup := fmt.Sprintf("%s.vpn.bak.%d", dst, time.Now().Unix())
+
+	// Read existing file (works even if it's a symlink) and back it up if present
+	if data, err := os.ReadFile(dst); err == nil {
+		if err := os.WriteFile(backup, data, 0644); err != nil {
+			return fmt.Errorf("failed to create backup of %s: %w", dst, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read %s: %w", dst, err)
+	}
+
+	// If /etc/resolv.conf is a symlink, remove it so we can write a regular file
+	if st, err := os.Lstat(dst); err == nil {
+		if st.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(dst); err != nil {
+				return fmt.Errorf("resolv.conf is a symlink and could not be removed: %w", err)
+			}
+		}
+	}
+
+	// Write new resolv.conf
+	content := ""
+	for _, s := range dnsServers {
+		content += "nameserver " + s + "\n"
+	}
+	if err := os.WriteFile(dst, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write %s: %w", dst, err)
 	}
 
 	return nil
