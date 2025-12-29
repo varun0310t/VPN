@@ -325,13 +325,14 @@ func (vc *VPNClient) Disconnect() error {
 		packet := []byte{byte(PacketTypeDisc)}
 		vc.conn.Write(packet)
 	}
+	// Restore DNS settings
+	vc.tunManager.RestoreDNS()
 
 	// Close TUN interface
 	if vc.tunManager != nil {
 		vc.tunManager.Close()
 		fmt.Println(" TUN interface closed")
 	}
-	vc.tunManager.RestoreDNS()
 
 	// Close UDP connection
 	if vc.conn != nil {
