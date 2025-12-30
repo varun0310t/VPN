@@ -13,11 +13,12 @@ import (
 var (
 	vpnClient *VPNClient
 	ClientCfg *ClientConfig
+	Password  string
 )
 
-func InitClient(serverAddr string, serverPort int) error {
+func InitClient(serverAddr string, serverPort int, password string) error {
 	var err error
-
+	Password = password
 	vpnClient, err = NewVPNClient(serverAddr, serverPort)
 	if err != nil {
 		return fmt.Errorf("failed to create VPN client: %w", err)
@@ -48,7 +49,7 @@ func Connect() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}
-
+	signal.Ignore(syscall.SIGPIPE)
 	// Setup signal handlers for shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

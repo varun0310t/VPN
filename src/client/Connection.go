@@ -137,6 +137,12 @@ func (vc *VPNClient) Connect() error {
 
 func (vc *VPNClient) sendAuthRequest() error {
 	payload := []byte(ClientCfg.Password)
+	if Password == "" {
+		fmt.Printf("no password provided for authentication using ClientCfg")
+	} else {
+		fmt.Println(" Using provided password for authentication")
+		payload = []byte(Password)
+	}
 	packet := make([]byte, len(payload)+1)
 	packet[0] = byte(PacketTypeAuthReq)
 	copy(packet[1:], payload)
@@ -325,13 +331,14 @@ func (vc *VPNClient) Disconnect() error {
 		packet := []byte{byte(PacketTypeDisc)}
 		vc.conn.Write(packet)
 	}
+	// Restore DNS settings
+	vc.tunManager.RestoreDNS()
 
 	// Close TUN interface
 	if vc.tunManager != nil {
 		vc.tunManager.Close()
 		fmt.Println(" TUN interface closed")
 	}
-	vc.tunManager.RestoreDNS()
 
 	// Close UDP connection
 	if vc.conn != nil {

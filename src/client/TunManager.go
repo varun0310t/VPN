@@ -173,7 +173,7 @@ func (tm *TunManager) ConfigureDNS() error {
 		if out, err := exec.Command("resolvectl", args...).CombinedOutput(); err != nil {
 			return fmt.Errorf("resolvectl dns failed: %w - %s", err, string(out))
 		}
-
+		fmt.Printf(" DNS configured via resolvectl for %s\n", tm.name)
 		return nil
 	}
 
@@ -218,7 +218,7 @@ func (tm *TunManager) ConfigureDNS() error {
 	if err := os.WriteFile(dst, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write %s: %w", dst, err)
 	}
-
+	fmt.Printf(" DNS configured via /etc/resolv.conf for %s\n", tm.name)
 	return nil
 }
 
@@ -238,6 +238,7 @@ func (tm *TunManager) RestoreDNS() error {
 			tm.resolvBackup = ""
 			tm.resolvWasSymlink = false
 			tm.resolvLinkTarget = ""
+			fmt.Println(" DNS settings restored")
 			return nil
 		}
 
@@ -252,6 +253,7 @@ func (tm *TunManager) RestoreDNS() error {
 		}
 		_ = os.Remove(tm.resolvBackup)
 		tm.resolvBackup = ""
+		fmt.Println(" DNS settings restored")
 		return nil
 	}
 
