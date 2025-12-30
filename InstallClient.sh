@@ -40,10 +40,11 @@ fi
 echo "Creating directory $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
-# 4. Move Binaries
+# 4. Move Binaries and files
 echo "Installing binaries..."
 cp build/mycelium "$INSTALL_DIR/"
 cp build/mycelium-client "$INSTALL_DIR/"
+cp src/config/ClientConfig.json "$INSTALL_DIR/"
 
 # 5. Create Symlink (Only for the CLI)
 echo "Creating symlink..."
@@ -59,6 +60,9 @@ chmod +x "$INSTALL_DIR/mycelium"
 # This allows the CLI (running as you) to launch the Core (running as root).
 chown root:root "$INSTALL_DIR/mycelium-client"
 chmod u+s "$INSTALL_DIR/mycelium-client"
+
+chown root:root "$INSTALL_DIR/mycelium"
+chmod u+s "$INSTALL_DIR/mycelium"
 
 echo -e "${GREEN}=== Installation Complete! ===${NC}"
 echo "You can now run '$APP_NAME connect' from anywhere."

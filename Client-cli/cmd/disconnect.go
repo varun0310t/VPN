@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -13,7 +14,14 @@ var disconnectCmd = &cobra.Command{
 	Use:   "disconnect",
 	Short: "Disconnect from the VPN",
 	Run: func(cmd *cobra.Command, args []string) {
-		pidFile := "vpn_client.pid"
+		// Get the directory of the currently running binary
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Printf("Failed to get executable path: %v\n", err)
+			return
+		}
+		binaryDir := filepath.Dir(exe)
+		pidFile := filepath.Join(binaryDir, "vpn_client.pid")
 
 		// Check if the PID file exists
 		data, err := os.ReadFile(pidFile)
@@ -33,8 +41,7 @@ var disconnectCmd = &cobra.Command{
 			return
 		}
 
-		//  Find the process
-		// Note On Unix, FindProcess always succeeds, it doesn't check if the process actually exists yet.
+		// Find the process
 		process, err := os.FindProcess(pid)
 		if err != nil {
 			fmt.Printf("Error finding process: %v\n", err)
@@ -42,7 +49,6 @@ var disconnectCmd = &cobra.Command{
 		}
 
 		// Check if the process is actually alive (Signal 0 trick)
-		// Sending signal 0 doesn't kill it, but returns an error if the process is gone.
 		if err := process.Signal(syscall.Signal(0)); err != nil {
 			fmt.Println("Process was already dead. Cleaning up stale PID file.")
 			os.Remove(pidFile)
@@ -50,11 +56,9 @@ var disconnectCmd = &cobra.Command{
 		}
 
 		// Send the Kill Signal (SIGTERM)
-		// SIGTERM is the polite way to ask a program to stop (allows it to close connections/files).
 		err = process.Signal(syscall.SIGTERM)
 		if err != nil {
 			fmt.Printf("Failed to stop process: %v\n", err)
-
 			return
 		}
 
