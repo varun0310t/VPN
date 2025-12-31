@@ -16,7 +16,6 @@ var (
 	Password  string
 )
 
-// InitClient initializes the VPN client with server details and user credentials.
 func InitClient(serverAddr string, serverPort int, password string) error {
 	var err error
 	Password = password
