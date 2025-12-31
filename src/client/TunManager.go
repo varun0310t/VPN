@@ -51,7 +51,7 @@ func NewTunManager(tunName string, assignedIP string) (*TunManager, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("ioctl TUNSETIFF failed: %v", errno)
 	}
-
+	//
 	fmt.Printf(" TUN interface %s created (fd: %d)\n", tunName, fd)
 
 	tm := &TunManager{

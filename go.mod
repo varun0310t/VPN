@@ -2,7 +2,11 @@ module github.com/varun0310t/VPN
 
 go 1.24.4
 
-require github.com/pion/dtls/v2 v2.2.12
+require (
+	github.com/pion/dtls/v2 v2.2.12
+	github.com/spf13/cobra v1.10.2
+	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
+)
 
 require (
 	github.com/pion/logging v0.2.2 // indirect
