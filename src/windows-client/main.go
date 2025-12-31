@@ -1,7 +1,8 @@
-//go:build linux
-// +build linux
+//go:build windows
+// +build windows
 
-package client
+// build windows
+package windowsclient
 
 import (
 	"fmt"
@@ -13,27 +14,19 @@ import (
 var (
 	vpnClient *VPNClient
 	ClientCfg *ClientConfig
-	Password  string
 )
 
-// InitClient initializes the VPN client with server details and user credentials.
 func InitClient(serverAddr string, serverPort int, password string) error {
 	var err error
-	Password = password
-	vpnClient, err = NewVPNClient(serverAddr, serverPort)
-	if err != nil {
-		return fmt.Errorf("failed to create VPN client: %w", err)
-	}
 
 	ClientCfg, err = loadClientConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load client config: %w", err)
 	}
 
-	// Save original network configuration
-	err = vpnClient.SaveNetworkConfig()
+	vpnClient, err = NewVPNClient(serverAddr, serverPort, password)
 	if err != nil {
-		return fmt.Errorf("failed to save network config: %w", err)
+		return fmt.Errorf("failed to create VPN client: %w", err)
 	}
 
 	fmt.Printf(" VPN Client initialized\n")
@@ -65,11 +58,11 @@ func Connect() error {
 	return nil
 }
 
-func Disconnect() error {
+func Disconnect() {
 	if vpnClient == nil {
-		return nil
+		return
 	}
 
 	fmt.Println("Disconnecting from VPN...")
-	return vpnClient.Disconnect()
+	vpnClient.Disconnect()
 }

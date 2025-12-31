@@ -18,19 +18,23 @@ type TunManager struct {
 	ip             string
 	DefaultGateway string
 	closed         bool
+	Session        wintun.Session
 }
 
-func NewTunManager(Name string, ip string) *TunManager {
-	guid, err := windows.GUIDFromString("0d38140cf6584aa292bd65bf20000619")
+func NewTunManager(Name string, ip string) (*TunManager, error) {
+	guid, err := windows.GUIDFromString("{c6dcde62-7346-45e9-88cd-3c8cbce94454}")
+	if err != nil {
+		return nil, fmt.Errorf("invalid GUID format: %w", err)
+	}
 
 	//Create Adapter
 	iface, err := wintun.CreateAdapter(Name, "Wintun", &guid)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to create TUN adapter: %w", err)
 	}
 	gateway, err := getDefaultGateway()
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to get default gateway: %w", err)
 	}
 	tm := &TunManager{
 		iface:          iface,
@@ -41,17 +45,23 @@ func NewTunManager(Name string, ip string) *TunManager {
 	}
 	err = tm.ConfigureIP()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	err = tm.SetMTU(1420)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	err = tm.SetMetric(5)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return tm
+	tm.Session, err = tm.iface.StartSession(0x800000)
+	if err != nil {
+		return nil, err
+	}
+	tm.Session.ReadWaitEvent()
+
+	return tm, nil
 }
 
 func (tm *TunManager) ConfigureIP() error {
@@ -97,4 +107,50 @@ func (tm *TunManager) SetMetric(metric int) error {
 		return fmt.Errorf("failed to set metric: %s", string(out))
 	}
 	return nil
+}
+
+// write packet to the TUN interface
+func (tm *TunManager) WritePacket(packet []byte) error {
+	if tm.closed {
+		return fmt.Errorf("TUN interface is closed")
+	}
+
+	if len(packet) < 20 {
+		return fmt.Errorf("packet too small: %d bytes", len(packet))
+	}
+
+	packetBuffer, err := tm.Session.AllocateSendPacket(int(len(packet)))
+	if err != nil {
+		return fmt.Errorf("failed to allocate send packet: %w", err)
+	}
+
+	copy(packetBuffer, packet)
+
+	tm.Session.SendPacket(packetBuffer)
+
+	return nil
+}
+
+// read packet from the TUN interface
+func (tm *TunManager) ReadPacket(buffer []byte) (int, error) {
+	if tm.closed {
+		return 0, fmt.Errorf("TUN interface is closed")
+	}
+	packet, err := tm.Session.ReceivePacket()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read from TUN: %w", err)
+	}
+	copy(buffer, packet)
+	tm.Session.ReleaseReceivePacket(packet)
+
+	return len(packet), nil
+}
+
+func (tm *TunManager) Close() error {
+	if tm.closed {
+		return nil
+	}
+	tm.closed = true
+	tm.Session.End()
+	return tm.iface.Close()
 }
