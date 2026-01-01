@@ -136,7 +136,7 @@ func (vc *VPNClient) Connect() error {
 }
 
 func (vc *VPNClient) sendAuthRequest() error {
-	payload := []byte(ClientCfg.Password)
+	payload := []byte(ClientCfg.PASSWORD)
 	if Password == "" {
 		fmt.Printf("no password provided for authentication using ClientCfg")
 	} else {

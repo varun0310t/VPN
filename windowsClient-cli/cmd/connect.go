@@ -48,6 +48,14 @@ var connectCmd = &cobra.Command{
 		exe, _ := os.Executable()
 		clientBin := filepath.Join(filepath.Dir(exe), "mycelium-client.exe")
 
+		// first check if process is already running by checking for pid file
+		pidFilePath := filepath.Join(filepath.Dir(exe), "vpn_client.pid")
+
+		if _, err := os.Stat(pidFilePath); err == nil {
+			fmt.Println("VPN client is already running. Please disconnect first.")
+			return
+		}
+
 		// Prepare the Command
 		proc := exec.Command(clientBin, "--server", serverIP, "--port", fmt.Sprintf("%d", serverPort), "--password", secretKey)
 
@@ -118,7 +126,7 @@ var connectCmd = &cobra.Command{
 			fmt.Println("Warning: Connection timed out waiting for confirmation.")
 			fmt.Println("The background process is still running. Check logs.")
 			// Check if the process is actually alive (Signal 0 trick)
-			proc.Process.Signal(syscall.SIGTERM)
+			proc.Process.Kill()
 			time.Sleep(10 * time.Second)
 			return
 		}
@@ -127,7 +135,7 @@ var connectCmd = &cobra.Command{
 
 		pid := proc.Process.Pid
 		binaryDir := filepath.Dir(exe)
-		pidFilePath := filepath.Join(binaryDir, "vpn_client.pid")
+		pidFilePath = filepath.Join(binaryDir, "vpn_client.pid")
 
 		if err := os.WriteFile(pidFilePath, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
 			fmt.Printf("Failed to write PID file: %v\n", err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -48,7 +49,7 @@ func updateConfig(key, value string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-
+	key = strings.ToUpper(key)
 	configPath := filepath.Dir(exe) + "/ClientConfig.json"
 
 	//Create the file if it doesn't exist

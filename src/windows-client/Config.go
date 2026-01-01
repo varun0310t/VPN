@@ -7,9 +7,9 @@ import (
 )
 
 type ClientConfig struct {
-	Password   string `json:"password"`
-	ServerIP   string `json:"server_ip,omitempty"`
-	ServerPort int    `json:"server_port,omitempty"`
+	PASSWORD   string `json:"PASSWORD"`
+	SERVERIP   string `json:"SERVERIP,omitempty"`
+	SERVERPORT int    `json:"SERVERPORT,omitempty"`
 }
 
 func loadClientConfig() (*ClientConfig, error) {
@@ -44,9 +44,9 @@ func loadClientConfig() (*ClientConfig, error) {
 	if os.IsNotExist(err) {
 		fmt.Println("Config file not found in any path, using default config")
 		return &ClientConfig{
-			Password:   "VPN1234",
-			ServerIP:   "127.0.0.1",
-			ServerPort: 8080,
+			PASSWORD:   "VPN1234",
+			SERVERIP:   "127.0.0.1",
+			SERVERPORT: 8080,
 		}, nil
 	}
 

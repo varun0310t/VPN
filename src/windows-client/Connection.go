@@ -159,7 +159,7 @@ func (client *VPNClient) sendAuthRequest() error {
 	if client.conn == nil {
 		return fmt.Errorf("connection is not established")
 	}
-	payload := []byte(ClientCfg.Password)
+	payload := []byte(ClientCfg.PASSWORD)
 	if client.SecretKey == "" {
 		fmt.Printf("secret key is empty using Config file ")
 	} else {

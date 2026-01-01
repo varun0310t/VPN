@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -44,6 +45,7 @@ func init() {
 // Helper function to handle the JSON logic
 func updateConfig(key, value string) error {
 	//first find the binary locaion the config file is same place
+	key = strings.ToUpper(key)
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
